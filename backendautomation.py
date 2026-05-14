@@ -1,9 +1,4 @@
 """
-Backend for RoyalShield Facebook and Instagram automation.
-
-This small FastAPI server provides an endpoint (`/webhook`) that receives
-JSON payloads from Make.com (or any other webhook provider) whenever a new
-comment, message or mention is detected on Facebook or Instagram.
 
 Upon receiving a request it will:
 1. Validate the incoming data structure.
