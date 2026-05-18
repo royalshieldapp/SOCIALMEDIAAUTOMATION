@@ -13,11 +13,11 @@ What it does:
 
 Local run:
     pip install -r requirements.txt
-    uvicorn backendautomation:app --host 0.0.0.0 --port 8000
+    uvicorn SOCIALMEDIAAUTOMATION:app --host 0.0.0.0 --port 8000
 
 Railway endpoint examples:
-    GET  https://YOUR-APP.up.railway.app/health
-    POST https://YOUR-APP.up.railway.app/webhook
+    GET  socialmediaautomation-production.up.railway.apphealth
+    POST socialmediaautomation-production.up.railway.app/webhook
 """
 
 import os
@@ -111,7 +111,7 @@ def verify_make_secret(secret_from_body: Optional[str], x_make_secret: Optional[
     - or in the request header as "x-make-secret"
     """
 
-    expected_secret = os.getenv("MAKE_SECRET")
+    expected_secret = os.getenv("https://hook.us2.make.com/jrhr94v97uuoo64bf7fk3sr5gtuyzw2d")
 
     if not expected_secret:
         return
@@ -231,7 +231,7 @@ async def handle_webhook(
 
     Media/caption payload:
     {
-      "image_url": "https://example.com/image.png",
+      "image_url": "https://cdn.phototourl.com/free/2026-05-18-ae76db29-2034-4da8-a3ff-1f0ad28888de.png",
       "caption": "Royal Shield App..."
     }
     """
