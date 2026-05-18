@@ -1,11 +1,11 @@
-# RoyalShield Automation Backend
+# SOCIALMEDIAAUTOMATION
 
 ## Railway
 
 Start command:
 
 ```bash
-uvicorn backendautomation:app --host 0.0.0.0 --port ${PORT:-8000}
+uvicorn SOCIALMEDIAAUTOMATION:app --host 0.0.0.0 --port ${PORT:-8000}
 ```
 
 ## Endpoints
