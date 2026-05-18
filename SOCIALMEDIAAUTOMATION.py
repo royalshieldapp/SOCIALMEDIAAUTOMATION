@@ -1,34 +1,37 @@
 """
 RoyalShield Automation Backend
 
-FastAPI backend for Make.com / Railway.
+FastAPI backend for Meta / Make.com / Railway.
 
 What it does:
-1. Receives webhook requests from Make.com.
-2. Supports two payload styles:
+1. Verifies Meta/Facebook/Instagram webhooks with GET /webhook.
+2. Receives POST webhook requests from Meta or Make.com.
+3. Supports two Make.com payload styles:
    - Instagram/Facebook comments for classification and reply generation.
    - Image/caption payloads for publishing or forwarding logic.
-3. Returns a fast JSON response so Make does not wait too long.
-4. Includes /health for Railway health checks.
+4. Returns fast JSON responses so Make and Meta do not wait too long.
+5. Includes /health for Railway health checks.
 
 Local run:
     pip install -r requirements.txt
     uvicorn SOCIALMEDIAAUTOMATION:app --host 0.0.0.0 --port 8000
 
 Railway endpoint examples:
-    GET  socialmediaautomation-production.up.railway.apphealth
-    POST socialmediaautomation-production.up.railway.app/webhook
+    GET  https://socialmediaautomation-production.up.railway.app/health
+    GET  https://socialmediaautomation-production.up.railway.app/webhook
+    POST https://socialmediaautomation-production.up.railway.app/webhook
 """
 
 import os
 from datetime import datetime, timezone
 from typing import Any, Dict, Literal, Optional
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Query, Request
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 
-app = FastAPI(title="SOCIALMEDIAAUTOMATION", version="1.1.0")
+app = FastAPI(title="SOCIALMEDIAAUTOMATION", version="1.2.0")
 
 
 Category = Literal[
@@ -39,11 +42,12 @@ Category = Literal[
     "spam",
     "irrelevante",
     "media_post",
+    "meta_event",
 ]
 
 
 class CommentPayload(BaseModel):
-    """Schema for incoming comment or message payloads."""
+    """Schema for incoming comment or message payloads from Make."""
 
     platform: Literal["facebook", "instagram"] = Field(
         ..., description="Social media platform where the message originated."
@@ -97,21 +101,26 @@ class MediaResponse(BaseModel):
 
 def now_iso() -> str:
     """Return current UTC time in ISO format."""
-
     return datetime.now(timezone.utc).isoformat()
 
 
-def verify_make_secret(secret_from_body: Optional[str], x_make_secret: Optional[str]) -> None:
+def verify_make_secret(
+    secret_from_body: Optional[str],
+    x_make_secret: Optional[str],
+) -> None:
     """
     Optional protection for Make.com requests.
 
-    If MAKE_SECRET is not configured in Railway, this check is skipped.
+    In Railway, set:
+        MAKE_SECRET=your_private_secret
+
+    If MAKE_SECRET is not configured, this check is skipped.
     If MAKE_SECRET exists, Make must send the same secret either:
     - in the JSON body as "secret"
     - or in the request header as "x-make-secret"
     """
 
-    expected_secret = os.getenv("https://hook.us2.make.com/jrhr94v97uuoo64bf7fk3sr5gtuyzw2d")
+    expected_secret = os.getenv("MAKE_SECRET")
 
     if not expected_secret:
         return
@@ -130,16 +139,49 @@ def classify_comment(text: str) -> Category:
     if any(word in lower for word in ["urgent", "urgente", "inmediato", "ayuda", "problema"]):
         return "urgent"
 
-    if any(word in lower for word in ["precio", "cotización", "cotizacion", "quote", "suscripción", "suscripcion", "plan", "costo"]):
+    if any(
+        word in lower
+        for word in [
+            "precio",
+            "cotización",
+            "cotizacion",
+            "quote",
+            "suscripción",
+            "suscripcion",
+            "plan",
+            "costo",
+        ]
+    ):
         return "lead"
 
     if any(word in lower for word in ["soporte", "error", "fallo", "bug", "no funciona"]):
         return "soporte"
 
-    if any(word in lower for word in ["http://", "https://", "compra aquí", "compra aqui", "haz clic", "click aquí", "click aqui"]):
+    if any(
+        word in lower
+        for word in [
+            "http://",
+            "https://",
+            "compra aquí",
+            "compra aqui",
+            "haz clic",
+            "click aquí",
+            "click aqui",
+        ]
+    ):
         return "spam"
 
-    if any(word in lower for word in ["royalshield", "royal shield", "gracias", "excelente", "buen trabajo", "me gusta"]):
+    if any(
+        word in lower
+        for word in [
+            "royalshield",
+            "royal shield",
+            "gracias",
+            "excelente",
+            "buen trabajo",
+            "me gusta",
+        ]
+    ):
         return "comentario_publico"
 
     return "irrelevante"
@@ -193,7 +235,7 @@ async def root() -> Dict[str, Any]:
     return {
         "ok": True,
         "service": "SOCIALMEDIAAUTOMATION",
-        "version": "1.1.0",
+        "version": "1.2.0",
         "health": "/health",
         "webhook": "/webhook",
     }
@@ -210,41 +252,72 @@ async def health() -> Dict[str, Any]:
     }
 
 
+@app.get("/webhook")
+async def verify_meta_webhook(
+    hub_mode: Optional[str] = Query(default=None, alias="hub.mode"),
+    hub_verify_token: Optional[str] = Query(default=None, alias="hub.verify_token"),
+    hub_challenge: Optional[str] = Query(default=None, alias="hub.challenge"),
+):
+    """
+    Meta/Facebook/Instagram webhook verification endpoint.
+
+    Meta sends:
+        hub.mode=subscribe
+        hub.verify_token=<your token>
+        hub.challenge=<number/string>
+
+    This endpoint must return only hub.challenge as plain text.
+    """
+
+    expected_token = os.getenv("META_VERIFY_TOKEN", "royalshield_verify_2026")
+
+    if hub_mode == "subscribe" and hub_verify_token == expected_token:
+        return PlainTextResponse(content=hub_challenge or "", status_code=200)
+
+    raise HTTPException(status_code=403, detail="Invalid Meta verify token")
+
+
 @app.post("/webhook")
 async def handle_webhook(
     request: Request,
     x_make_secret: Optional[str] = Header(default=None),
 ) -> Dict[str, Any]:
     """
-    Endpoint triggered by Make.com.
+    Main webhook endpoint.
 
-    Supported JSON formats:
-
-    Comment classification:
-    {
-      "platform": "instagram",
-      "comment_id": "123",
-      "comment_text": "quiero precio",
-      "user_name": "Carlos",
-      "timestamp": "2026-05-14T12:00:00Z"
-    }
-
-    Media/caption payload:
-    {
-      "image_url": "https://cdn.phototourl.com/free/2026-05-18-ae76db29-2034-4da8-a3ff-1f0ad28888de.png",
-      "caption": "Royal Shield App..."
-    }
+    Receives:
+    - Meta webhook events
+    - Make.com image/caption payloads
+    - Make.com comment classification payloads
     """
 
-    body = await request.json()
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
 
-    secret_from_body = body.get("secret") if isinstance(body, dict) else None
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="JSON body must be an object")
+
+    # Meta webhook events usually include "object" and "entry".
+    # Return 200 fast so Meta does not mark the webhook as failing.
+    if "object" in body and "entry" in body:
+        print("META WEBHOOK EVENT:", body)
+        return {
+            "ok": True,
+            "category": "meta_event",
+            "message": "Meta webhook event received.",
+            "received_at": now_iso(),
+        }
+
+    # Optional Make.com protection.
+    secret_from_body = body.get("secret")
     verify_make_secret(secret_from_body=secret_from_body, x_make_secret=x_make_secret)
 
+    # Make.com media payload.
     if "image_url" in body and "caption" in body:
         media_payload = MediaPayload(**body)
 
-        # Keep this response fast. Add publishing, queueing, or database logic later.
         return MediaResponse(
             message="Media payload received by RoyalShield backend.",
             image_url=media_payload.image_url,
@@ -252,6 +325,7 @@ async def handle_webhook(
             received_at=now_iso(),
         ).model_dump()
 
+    # Make.com comment/message payload.
     comment_payload = CommentPayload(**body)
     category = classify_comment(comment_payload.comment_text)
     reply = generate_reply(category, comment_payload)
