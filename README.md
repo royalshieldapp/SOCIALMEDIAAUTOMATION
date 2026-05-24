@@ -1,63 +1,56 @@
 # SOCIALMEDIAAUTOMATION
 
-## Railway
+Backend en FastAPI para automatizar Facebook e Instagram con Make.com:
+- Responder comentarios automáticamente según clasificación.
+- Preparar payload de publicación (inmediata o programada).
+- Validar webhook de Meta.
 
-Start command:
+## Ejecutar local
 
 ```bash
-uvicorn SOCIALMEDIAAUTOMATION:app --host 0.0.0.0 --port ${PORT:-8000}
+pip install -r requirements.txt
+uvicorn SOCIALMEDIAAUTOMATION:app --host 0.0.0.0 --port 8000
 ```
 
 ## Endpoints
 
 - `GET /health`
-- `POST /webhook`
+- `GET /webhook` (verificación Meta)
+- `POST /webhook` (comentarios + publicaciones)
 
-## Make.com HTTP module
+## Datos que necesitas configurar (checklist)
 
-Use:
+1. `META_VERIFY_TOKEN` (Railway env var).
+2. `MAKE_SECRET` (opcional pero recomendado).
+3. `FACEBOOK_PAGE_ID`.
+4. `INSTAGRAM_BUSINESS_ACCOUNT_ID`.
+5. `META_LONG_LIVED_ACCESS_TOKEN`.
+6. Permisos de app: `pages_manage_posts`, `pages_read_engagement`, `instagram_basic`, `instagram_content_publish`, `pages_manage_metadata`.
+7. Escenarios de Make.com:
+   - Escenario A: recibir comentario -> llamar backend -> si `action=auto_reply`, publicar respuesta.
+   - Escenario B: crear publicación -> llamar backend -> enviar `publish_payload` a Graph API.
 
-```text
-POST https://YOUR-APP.up.railway.app/webhook
-Content-Type: application/json
-Timeout: 30 seconds
-```
-
-For comment classification:
+## Ejemplo: comentario
 
 ```json
 {
   "platform": "instagram",
-  "comment_id": "123",
+  "comment_id": "1789",
   "comment_text": "quiero precio",
   "user_name": "Carlos",
-  "timestamp": "2026-05-14T12:00:00Z"
+  "timestamp": "2026-05-24T18:00:00Z",
+  "post_id": "998877"
 }
 ```
 
-For image/caption:
+## Ejemplo: publicación
 
 ```json
 {
-  "image_url": "https://example.com/image.png",
-  "caption": "Royal Shield App..."
+  "event_type": "publish_post",
+  "platform": "facebook",
+  "caption": "Nuevo lanzamiento RoyalShield",
+  "image_url": "https://example.com/image.jpg",
+  "publish_at": "2026-05-30T15:00:00Z"
 }
-```
-
-Optional security:
-
-Set `MAKE_SECRET` in Railway Variables, then send the same value from Make either as:
-
-```json
-{
-  "secret": "YOUR_SECRET",
-  "image_url": "https://example.com/image.png",
-  "caption": "Royal Shield App..."
-}
-```
-
-or as a header:
-
-```text
-x-make-secret: YOUR_SECRET
 ```
