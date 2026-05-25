@@ -54,6 +54,15 @@ class CommentPayload(BaseModel):
         default=None,
         description="Optional ID of the publication that received the comment.",
     )
+    # Falls back to the POST_ID environment variable when not supplied in the
+    # request body, allowing Railway to provide a default post for the workflow.
+    post_id_default: Optional[str] = Field(
+        default_factory=lambda: os.getenv("POST_ID"),
+        description=(
+            "Default post ID sourced from the POST_ID env var. "
+            "Used as a fallback when post_id is not provided in the payload."
+        ),
+    )
 
 
 class PublishPayload(BaseModel):
@@ -68,6 +77,15 @@ class PublishPayload(BaseModel):
     publish_at: Optional[str] = Field(
         default=None,
         description="Optional ISO timestamp for scheduling.",
+    )
+    # Falls back to the MEDIA_ID environment variable when not supplied in the
+    # request body, allowing Railway to pin a default media asset for the workflow.
+    media_id: Optional[str] = Field(
+        default_factory=lambda: os.getenv("MEDIA_ID"),
+        description=(
+            "Optional media container ID sourced from the MEDIA_ID env var. "
+            "Used when the media asset was pre-uploaded and only its ID is needed."
+        ),
     )
 
     @field_validator("image_url", "video_url")
@@ -213,7 +231,7 @@ def generate_reply(category: Category, payload: CommentPayload) -> str:
 def build_publish_payload(payload: PublishPayload) -> Dict[str, Any]:
     media_type = "image" if payload.image_url else "video" if payload.video_url else "text"
 
-    result = {
+    result: Dict[str, Any] = {
         "platform": payload.platform,
         "caption": payload.caption,
         "media_type": media_type,
@@ -221,6 +239,13 @@ def build_publish_payload(payload: PublishPayload) -> Dict[str, Any]:
         "video_url": payload.video_url,
         "publish_at": payload.publish_at,
     }
+
+    # Include media_id when available — sourced from the request body or the
+    # MEDIA_ID env var — so downstream Make modules can reference a pre-uploaded
+    # media container without needing to re-upload the asset.
+    if payload.media_id:
+        result["media_id"] = payload.media_id
+
     return result
 
 
@@ -237,7 +262,18 @@ async def root() -> Dict[str, Any]:
             "caption",
             "image_url or video_url (optional for text posts)",
             "publish_at (optional)",
+            "media_id (optional — overrides MEDIA_ID env var)",
         ],
+        "optional_env_vars": {
+            # Set POST_ID on Railway to provide a default post for comment
+            # classification workflows; individual requests can still override
+            # it by supplying post_id directly in the payload.
+            "POST_ID": "Default post ID used as a fallback in CommentPayload when post_id is not supplied in the request.",
+            # Set MEDIA_ID on Railway to reference a pre-uploaded media container
+            # in publish workflows; individual requests can still override it by
+            # supplying media_id directly in the payload.
+            "MEDIA_ID": "Default media container ID included in the normalized publish payload when media_id is not supplied in the request.",
+        },
     }
 
 
