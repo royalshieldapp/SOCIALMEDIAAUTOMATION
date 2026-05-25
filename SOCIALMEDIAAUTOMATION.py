@@ -252,7 +252,7 @@ async def verify_meta_webhook(
     hub_verify_token: Optional[str] = Query(default=None, alias="hub.verify_token"),
     hub_challenge: Optional[str] = Query(default=None, alias="hub.challenge"),
 ):
-    expected_token = os.getenv("META_VERIFY_TOKEN", "royalshield_verify_2026")
+    expected_token = os.getenv("royalshield_verify_2026")
 
     if hub_mode == "subscribe" and hub_verify_token == expected_token:
         return PlainTextResponse(content=hub_challenge or "", status_code=200)
