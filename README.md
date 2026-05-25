@@ -17,16 +17,16 @@ Backend en FastAPI para automatizar Facebook e Instagram con Make.com:
 - `PAGE_ID=61573434707140`
 - `INSTAGRAM_BUSINESS_ID=2640495129436229`
 - `POST_ID=18068953853001463`
-- `MEDIA_ID=18002500652607734`
+- `MEDIA_ID=1184853931369329`
 
 > Recomendación: guárdalos también como variables en Railway:
 > - `DEFAULT_POST_ID=18068953853001463`
-> - `DEFAULT_MEDIA_ID=18002500652607734`
+> - `DEFAULT_MEDIA_ID=1184853931369329`
 
 ## Confirmación de IDs operativos
 
 - POST_ID activo: `18068953853001463`
-- MEDIA_ID activo: `18002500652607734`
+- MEDIA_ID activo: `1184853931369329`
 - Fecha de confirmación: `2026-05-25`
 
 ## Ejecutar local
