@@ -1,0 +1,72 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "socialmediaautomation"
+version = "2.0.0"
+description = "FastAPI backend for automating social media posts on Facebook/Instagram with Make.com"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [
+    {name = "RoyalShield", email = "info@royalshield.app"}
+]
+keywords = [
+    "fastapi",
+    "facebook",
+    "instagram",
+    "automation",
+    "make.com",
+    "railway",
+    "social-media"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Framework :: FastAPI",
+    "Topic :: Internet",
+]
+
+dependencies = [
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "black>=23.0",
+    "flake8>=6.0",
+    "pylint>=2.17",
+    "isort>=5.12",
+]
+
+[project.urls]
+Homepage = "https://github.com/royalshieldapp/SOCIALMEDIAAUTOMATION"
+Repository = "https://github.com/royalshieldapp/SOCIALMEDIAAUTOMATION.git"
+Issues = "https://github.com/royalshieldapp/SOCIALMEDIAAUTOMATION/issues"
+
+[tool.black]
+line-length = 88
+target-version = ['py311', 'py312']
+
+[tool.isort]
+profile = "black"
+line_length = 88
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+addopts = "-v"
+
+[tool.coverage.run]
+source = ["SOCIALMEDIAAUTOMATION.py"]
+omit = ["*/tests/*", "*/test_*.py"]
