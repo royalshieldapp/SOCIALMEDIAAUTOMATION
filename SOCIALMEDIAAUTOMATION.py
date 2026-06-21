@@ -151,7 +151,15 @@ def get_meta_verify_token() -> Optional[str]:
 
 
 def validation_error_response(exc: ValidationError) -> HTTPException:
-    return HTTPException(status_code=422, detail=exc.errors())
+    errors = [
+        {
+            "loc": error.get("loc", []),
+            "msg": error.get("msg", "Invalid value"),
+            "type": error.get("type", "value_error"),
+        }
+        for error in exc.errors()
+    ]
+    return HTTPException(status_code=422, detail=errors)
 
 
 def verify_make_secret(secret_from_body: Optional[str], x_make_secret: Optional[str]) -> None:
@@ -334,6 +342,8 @@ async def config() -> Dict[str, Any]:
             "META_APP_ID": env_is_set("META_APP_ID"),
             "INSTAGRAM_APP_ID": env_is_set("INSTAGRAM_APP_ID"),
             "META_BUSINESS_ID": env_is_set("META_BUSINESS_ID"),
+            "FACEBOOK_PAGE_ID": env_is_set("FACEBOOK_PAGE_ID"),
+            "INSTAGRAM_BUSINESS_ACCOUNT_ID": env_is_set("INSTAGRAM_BUSINESS_ACCOUNT_ID"),
             "GOOGLE_SHEET_ID": env_is_set("GOOGLE_SHEET_ID"),
             "POST_ID": env_is_set("POST_ID"),
             "MEDIA_ID": env_is_set("MEDIA_ID"),
