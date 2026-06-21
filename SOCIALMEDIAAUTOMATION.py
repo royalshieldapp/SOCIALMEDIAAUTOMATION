@@ -8,7 +8,7 @@ What it does:
 2. Receives POST webhook requests from Meta or Make.com.
 3. Classifies Facebook/Instagram comments and returns a suggested reply + action.
 4. Validates publish requests and returns a normalized payload for automation modules.
-5. Includes /health for Railway health checks.
+5. Includes /health and /config for Railway checks and setup verification.
 
 Local run:
     pip install -r requirements.txt
@@ -22,10 +22,11 @@ from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 
-app = FastAPI(title="SOCIALMEDIAAUTOMATION", version="2.0.0")
+APP_VERSION = "2.1.0"
+app = FastAPI(title="SOCIALMEDIAAUTOMATION", version=APP_VERSION)
 
 
 Category = Literal[
@@ -49,19 +50,17 @@ class CommentPayload(BaseModel):
     comment_id: str
     comment_text: str
     user_name: str
-    timestamp: str
+    timestamp: Optional[str] = Field(
+        default=None,
+        description="Optional ISO timestamp when the comment was created.",
+    )
     post_id: Optional[str] = Field(
         default=None,
         description="Optional ID of the publication that received the comment.",
     )
-    # Falls back to the POST_ID environment variable when not supplied in the
-    # request body, allowing Railway to provide a default post for the workflow.
     post_id_default: Optional[str] = Field(
         default_factory=lambda: os.getenv("POST_ID"),
-        description=(
-            "Default post ID sourced from the POST_ID env var. "
-            "Used as a fallback when post_id is not provided in the payload."
-        ),
+        description="Fallback post ID sourced from POST_ID when post_id is not supplied.",
     )
 
 
@@ -78,21 +77,16 @@ class PublishPayload(BaseModel):
         default=None,
         description="Optional ISO timestamp for scheduling.",
     )
-    # Falls back to the MEDIA_ID environment variable when not supplied in the
-    # request body, allowing Railway to pin a default media asset for the workflow.
     media_id: Optional[str] = Field(
         default_factory=lambda: os.getenv("MEDIA_ID"),
-        description=(
-            "Optional media container ID sourced from the MEDIA_ID env var. "
-            "Used when the media asset was pre-uploaded and only its ID is needed."
-        ),
+        description="Optional media container ID supplied by Make or MEDIA_ID.",
     )
 
     @field_validator("image_url", "video_url")
     @classmethod
     def validate_media_urls(cls, value: Optional[str]) -> Optional[str]:
-        if value is None:
-            return value
+        if value is None or value == "":
+            return None
         if not re.match(r"^https?://", value):
             raise ValueError("media URLs must start with http:// or https://")
         return value
@@ -108,8 +102,8 @@ class PublishPayload(BaseModel):
     @field_validator("publish_at")
     @classmethod
     def validate_publish_date(cls, value: Optional[str]) -> Optional[str]:
-        if value is None:
-            return value
+        if value is None or value == "":
+            return None
         datetime.fromisoformat(value.replace("Z", "+00:00"))
         return value
 
@@ -146,6 +140,20 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def env_is_set(name: str) -> bool:
+    value = os.getenv(name)
+    return bool(value and value.strip())
+
+
+def get_meta_verify_token() -> Optional[str]:
+    # The legacy key is kept only so old Railway projects do not break abruptly.
+    return os.getenv("META_VERIFY_TOKEN") or os.getenv("royalshield_verify_2026")
+
+
+def validation_error_response(exc: ValidationError) -> HTTPException:
+    return HTTPException(status_code=422, detail=exc.errors())
+
+
 def verify_make_secret(secret_from_body: Optional[str], x_make_secret: Optional[str]) -> None:
     expected_secret = os.getenv("MAKE_SECRET")
     if not expected_secret:
@@ -163,17 +171,47 @@ def classify_comment(text: str) -> Category:
 
     if any(
         word in lower
-        for word in ["precio", "cotización", "cotizacion", "quote", "suscripción", "suscripcion", "plan", "costo"]
+        for word in [
+            "precio",
+            "cotización",
+            "cotizacion",
+            "quote",
+            "suscripción",
+            "suscripcion",
+            "plan",
+            "costo",
+        ]
     ):
         return "lead"
 
     if any(word in lower for word in ["soporte", "error", "fallo", "bug", "no funciona"]):
         return "soporte"
 
-    if any(word in lower for word in ["http://", "https://", "compra aquí", "compra aqui", "haz clic", "click aquí", "click aqui"]):
+    if any(
+        word in lower
+        for word in [
+            "http://",
+            "https://",
+            "compra aquí",
+            "compra aqui",
+            "haz clic",
+            "click aquí",
+            "click aqui",
+        ]
+    ):
         return "spam"
 
-    if any(word in lower for word in ["royalshield", "royal shield", "gracias", "excelente", "buen trabajo", "me gusta"]):
+    if any(
+        word in lower
+        for word in [
+            "royalshield",
+            "royal shield",
+            "gracias",
+            "excelente",
+            "buen trabajo",
+            "me gusta",
+        ]
+    ):
         return "comentario_publico"
 
     return "irrelevante"
@@ -240,9 +278,6 @@ def build_publish_payload(payload: PublishPayload) -> Dict[str, Any]:
         "publish_at": payload.publish_at,
     }
 
-    # Include media_id when available — sourced from the request body or the
-    # MEDIA_ID env var — so downstream Make modules can reference a pre-uploaded
-    # media container without needing to re-upload the asset.
     if payload.media_id:
         result["media_id"] = payload.media_id
 
@@ -254,32 +289,56 @@ async def root() -> Dict[str, Any]:
     return {
         "ok": True,
         "service": "SOCIALMEDIAAUTOMATION",
-        "version": "2.0.0",
+        "version": APP_VERSION,
         "health": "/health",
+        "config": "/config",
         "webhook": "/webhook",
+        "make_webhook": "/webhook/make",
         "required_publish_fields": [
             "platform",
             "caption",
             "image_url or video_url (optional for text posts)",
             "publish_at (optional)",
-            "media_id (optional — overrides MEDIA_ID env var)",
+            "media_id (optional; overrides MEDIA_ID env var)",
         ],
-        "optional_env_vars": {
-            # Set POST_ID on Railway to provide a default post for comment
-            # classification workflows; individual requests can still override
-            # it by supplying post_id directly in the payload.
-            "POST_ID": "Default post ID used as a fallback in CommentPayload when post_id is not supplied in the request.",
-            # Set MEDIA_ID on Railway to reference a pre-uploaded media container
-            # in publish workflows; individual requests can still override it by
-            # supplying media_id directly in the payload.
-            "MEDIA_ID": "Default media container ID included in the normalized publish payload when media_id is not supplied in the request.",
-        },
     }
 
 
 @app.get("/health")
 async def health() -> Dict[str, Any]:
-    return {"ok": True, "status": "healthy", "received_at": now_iso()}
+    return {
+        "ok": True,
+        "status": "healthy",
+        "environment": os.getenv("ENVIRONMENT", "development"),
+        "received_at": now_iso(),
+    }
+
+
+@app.get("/config")
+async def config() -> Dict[str, Any]:
+    return {
+        "ok": True,
+        "service": "SOCIALMEDIAAUTOMATION",
+        "version": APP_VERSION,
+        "environment": os.getenv("ENVIRONMENT", "development"),
+        "endpoints": {
+            "health": "/health",
+            "meta_verify": "/webhook",
+            "make_webhook": "/webhook/make",
+            "docs": "/docs",
+        },
+        "configured": {
+            "META_VERIFY_TOKEN": bool(get_meta_verify_token()),
+            "META_LONG_LIVED_ACCESS_TOKEN": env_is_set("META_LONG_LIVED_ACCESS_TOKEN"),
+            "MAKE_SECRET": env_is_set("MAKE_SECRET"),
+            "META_APP_ID": env_is_set("META_APP_ID"),
+            "INSTAGRAM_APP_ID": env_is_set("INSTAGRAM_APP_ID"),
+            "META_BUSINESS_ID": env_is_set("META_BUSINESS_ID"),
+            "GOOGLE_SHEET_ID": env_is_set("GOOGLE_SHEET_ID"),
+            "POST_ID": env_is_set("POST_ID"),
+            "MEDIA_ID": env_is_set("MEDIA_ID"),
+        },
+    }
 
 
 @app.get("/webhook")
@@ -288,7 +347,9 @@ async def verify_meta_webhook(
     hub_verify_token: Optional[str] = Query(default=None, alias="hub.verify_token"),
     hub_challenge: Optional[str] = Query(default=None, alias="hub.challenge"),
 ):
-    expected_token = os.getenv("royalshield_verify_2026")
+    expected_token = get_meta_verify_token()
+    if not expected_token:
+        raise HTTPException(status_code=500, detail="META_VERIFY_TOKEN is not configured")
 
     if hub_mode == "subscribe" and hub_verify_token == expected_token:
         return PlainTextResponse(content=hub_challenge or "", status_code=200)
@@ -297,6 +358,7 @@ async def verify_meta_webhook(
 
 
 @app.post("/webhook")
+@app.post("/webhook/make")
 async def handle_webhook(request: Request, x_make_secret: Optional[str] = Header(default=None)) -> Dict[str, Any]:
     try:
         body = await request.json()
@@ -318,7 +380,11 @@ async def handle_webhook(request: Request, x_make_secret: Optional[str] = Header
     verify_make_secret(secret_from_body=secret_from_body, x_make_secret=x_make_secret)
 
     if body.get("event_type") == "publish_post" or "caption" in body:
-        publish_payload = PublishPayload(**body)
+        try:
+            publish_payload = PublishPayload(**body)
+        except ValidationError as exc:
+            raise validation_error_response(exc) from exc
+
         normalized_payload = build_publish_payload(publish_payload)
         action = "schedule_post" if publish_payload.publish_at else "publish_now"
 
@@ -334,7 +400,11 @@ async def handle_webhook(request: Request, x_make_secret: Optional[str] = Header
             received_at=now_iso(),
         ).model_dump()
 
-    comment_payload = CommentPayload(**body)
+    try:
+        comment_payload = CommentPayload(**body)
+    except ValidationError as exc:
+        raise validation_error_response(exc) from exc
+
     category = classify_comment(comment_payload.comment_text)
     action = action_for_category(category)
     reply = generate_reply(category, comment_payload)
@@ -345,7 +415,9 @@ async def handle_webhook(request: Request, x_make_secret: Optional[str] = Header
         reply=reply,
         tags=tags_for_category(category),
         make_next_step=(
-            "Publicar reply con módulo 'Create Comment Reply' de Make" if action == "auto_reply" else "Enviar a revisión manual"
+            "Publicar reply con módulo 'Create Comment Reply' de Make"
+            if action == "auto_reply"
+            else "Enviar a revisión manual"
         ),
         received_at=now_iso(),
     ).model_dump()
