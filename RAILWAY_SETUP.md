@@ -1,189 +1,165 @@
-# 🚂 Configuración Railway + GitHub para RoyalShield Social Media Automation
+# 🚂 Configuracion Railway + GitHub
 
-## Paso 1: Crear proyecto en Railway
+Esta guia deja `royalshieldapp/SOCIALMEDIAAUTOMATION` corriendo en Railway con una URL publica HTTPS para Meta y Make.com.
 
-1. Ve a [railway.app](https://railway.app)
-2. Haz clic en **"New Project"**
-3. Selecciona **"Deploy from GitHub"**
-4. Conecta tu cuenta de GitHub y selecciona: `royalshieldapp/SOCIALMEDIAAUTOMATION`
-5. Railway auto-detectará que es una app Python/FastAPI
+## 1. Crear proyecto en Railway
 
-## Paso 2: Configurar variables de entorno en Railway
+1. Entra a [railway.app](https://railway.app).
+2. Crea un proyecto nuevo.
+3. Selecciona **Deploy from GitHub repo**.
+4. Escoge `royalshieldapp/SOCIALMEDIAAUTOMATION`.
+5. Railway usara el `Dockerfile` del repo.
 
-En tu proyecto de Railway, ve a **Variables** y añade:
+El repo incluye `railway.json` con health check en `/health`.
 
-```
+## 2. Configurar variables de entorno
+
+En Railway, abre tu servicio y ve a **Variables**. Agrega:
+
+```env
 META_APP_ID=614438388426527
 INSTAGRAM_APP_ID=1280603234240148
 META_BUSINESS_ID=2640495129436229
-META_VERIFY_TOKEN=your_secure_random_token_here_abc123xyz
-META_LONG_LIVED_ACCESS_TOKEN=YOUR_META_ACCESS_TOKEN_HERE
+META_VERIFY_TOKEN=pon_aqui_un_token_seguro
+META_LONG_LIVED_ACCESS_TOKEN=pon_aqui_tu_token_largo_de_meta
 
 MAKE_WEBHOOK_ID=2322427
-MAKE_SECRET=your_make_secret_token_here
+MAKE_SECRET=pon_aqui_un_secreto_para_make
 MAKE_FACEBOOK_CONNECTION_1=8998683
 MAKE_FACEBOOK_CONNECTION_2=8947884
 MAKE_FACEBOOK_CONNECTION_3=8998792
 MAKE_GOOGLE_CONNECTION=8924705
 
+FACEBOOK_PAGE_ID=tu_facebook_page_id
+INSTAGRAM_BUSINESS_ACCOUNT_ID=tu_instagram_business_account_id
 GOOGLE_SHEET_ID=10yqUf1Ch-EoTB97UVdfs4TFb4WPw8KXb22nEWaXp7bs
 
-PORT=8000
 ENVIRONMENT=production
 DEBUG=False
 ```
 
-### ⚠️ IMPORTANTE: Obtener `META_LONG_LIVED_ACCESS_TOKEN`
+No es necesario configurar `PORT` manualmente en Railway. Railway lo inyecta y el `Dockerfile` ya lo usa.
 
-1. Ve a [Facebook Developers](https://developers.facebook.com)
-2. App Settings → Tools → Access Token Debugger
-3. Genera un token corto desde Graph API Explorer
-4. Canjéalo por uno de larga duración:
+Variables opcionales:
 
-```bash
-# Reemplaza los valores:
-curl -i -X GET "https://graph.instagram.com/oauth/access_token?grant_type=fb_exchange_token&client_id=614438388426527&client_secret=YOUR_APP_SECRET&fb_exchange_token=SHORT_TOKEN"
+```env
+POST_ID=
+MEDIA_ID=
 ```
 
-## Paso 3: Obtener URL desplegada en Railway
+## 3. Verificar deploy
 
-Una vez desplegado, Railway te mostrará una URL como:
-```
+Cuando Railway termine el deploy, copia la URL publica. Debe verse similar a:
+
+```text
 https://socialmediaautomation-production.up.railway.app
 ```
 
-**Guarda esta URL**, la necesitarás para los webhooks.
-
-## Paso 4: Configurar Webhooks de Meta
-
-### 4.1 En Facebook App Dashboard
-
-1. Ve a **Settings** → **Basic** (copia App ID y App Secret)
-2. Ve a **Settings** → **Webhooks**
-3. Haz clic en **Edit Webhooks**
-
-### 4.2 Añadir URL de webhook
-
-- **Callback URL**: `https://tu-railway-url/webhook`
-- **Verify Token**: El mismo que pusiste en `META_VERIFY_TOKEN`
-- **Subscription Fields**: Selecciona:
-  - ✅ `feed`
-  - ✅ `comments`
-  - ✅ `messages`
-  - ✅ `message_reads`
-
-4. Haz clic en **Verify and Save**
-
-### 4.3 Suscribir a eventos
-
-En la misma sección, bajo "Webhooks", haz clic en **"Manage Subscriptions"**:
-
-- ✅ Page Feed
-- ✅ Conversations  
-- ✅ Instagram Comments
-- ✅ Instagram Stories Comments
-
-## Paso 5: Configurar Make.com (Scenarios)
-
-### Scenario A: Auto-responder comentarios
-
-```
-[Webhook Trigger]
-    ↓
-[HTTP POST] → https://tu-railway-url/webhook
-Body:
-{
-  "platform": "instagram",
-  "comment_id": "{{86.id}}",
-  "comment_text": "{{86.message}}",
-  "user_name": "{{86.from.name}}",
-  "timestamp": "now",
-  "post_id": "{{86.object}}",
-  "action": "auto_reply"
-}
-    ↓
-[Meta API] → Reply to comment
-```
-
-### Scenario B: Publicar posts programados
-
-```
-[Google Sheets] Nueva fila
-    ↓
-[HTTP POST] → https://tu-railway-url/webhook/make
-Body:
-{
-  "event_type": "publish_post",
-  "platform": "{{1.Platform}}",
-  "caption": "{{1.Caption}}",
-  "image_url": "{{1.Image URL}}",
-  "publish_at": "{{1.Scheduled Time}}"
-}
-    ↓
-[FastAPI] → Meta Graph API
-    ↓
-Post published! 🎉
-```
-
-## Paso 6: GitHub Secrets (para CI/CD automático)
-
-Ve a **Settings** → **Secrets and variables** → **Actions** en tu repo de GitHub:
-
-```
-RAILWAY_TOKEN = your-railway-api-token
-RAILWAY_PROJECT_ID = your-project-id
-```
-
-Para obtener estos:
-1. En Railway, haz clic en tu perfil → **Tokens**
-2. Crea un nuevo token y cópialo como `RAILWAY_TOKEN`
-3. En tu proyecto, copia el **Project ID** desde la URL
-
-## Paso 7: Desplegar cambios
-
-Una vez todo esté configurado:
+Prueba estos endpoints:
 
 ```bash
-git add .
-git commit -m "Setup Railway + GitHub Actions deployment"
-git push origin main
+curl https://tu-url-railway/health
+curl https://tu-url-railway/config
 ```
 
-GitHub Actions ejecutará automáticamente y desplegará en Railway. ¡Listo! 🚀
+`/config` solo muestra si las variables estan configuradas. No expone tokens.
 
-## Verificar que funciona
+## 4. Configurar webhook en Meta
 
-```bash
-# Health check
-curl https://tu-railway-url/health
+En Facebook Developers / Meta App Dashboard:
 
-# Ver config (sin datos sensibles)
-curl https://tu-railway-url/config
+1. Ve a **Webhooks**.
+2. Agrega o edita el webhook.
+3. Usa esta URL:
 
-# Ver logs en Railway
-# Dashboard → Deployments → Logs
+```text
+https://tu-url-railway/webhook
 ```
+
+4. En **Verify Token**, pon exactamente el mismo valor que `META_VERIFY_TOKEN` en Railway.
+5. Guarda y verifica.
+
+Campos sugeridos segun el producto activado en tu app:
+
+- `feed`
+- `comments`
+- `messages`
+- Instagram comments si tu app tiene Instagram Graph API habilitado
+
+## 5. Conectar Make.com
+
+Make debe enviar payloads normalizados al backend.
+
+Para comentarios:
+
+```text
+POST https://tu-url-railway/webhook
+Header: x-make-secret: TU_MAKE_SECRET
+```
+
+Para publicaciones:
+
+```text
+POST https://tu-url-railway/webhook/make
+Header: x-make-secret: TU_MAKE_SECRET
+```
+
+La guia completa esta en [`MAKE_SETUP.md`](./MAKE_SETUP.md).
+
+## 6. Obtener token largo de Meta
+
+Necesitas un token largo con permisos suficientes para los modulos de Meta que usara Make.
+
+Permisos comunes:
+
+- `pages_show_list`
+- `pages_read_engagement`
+- `pages_manage_posts`
+- `instagram_basic`
+- `instagram_manage_comments`
+- `instagram_content_publish`
+
+El token debe pertenecer a una cuenta con acceso a la Facebook Page y a la cuenta de Instagram profesional conectada.
+
+## 7. Prueba final
+
+1. Publica un comentario real en Instagram/Facebook.
+2. Confirma que Make lo detecta.
+3. Confirma que Make llama al backend.
+4. Confirma que el backend responde con `action` y `reply`.
+5. Confirma que Make publica la respuesta con el modulo de Meta.
+
+Para publicaciones programadas:
+
+1. Crea una fila en Google Sheets.
+2. Make envia el payload a `/webhook/make`.
+3. El backend devuelve `publish_payload`.
+4. Make publica o programa en Meta.
+5. Make actualiza `Status` en Google Sheets.
 
 ## Troubleshooting
 
-### "Invalid verify token" en webhook
+### `Invalid Meta verify token`
 
-- ✅ Asegúrate de que `META_VERIFY_TOKEN` en Railway coincide con el que pusiste en Meta App
-- ✅ Espera 5 minutos después de cambiar variables en Railway
+`META_VERIFY_TOKEN` en Railway no coincide con el token configurado en Meta.
 
-### Webhook no se ejecuta
+### `META_VERIFY_TOKEN is not configured`
 
-- ✅ Verifica que la URL es correcta en Meta App Dashboard
-- ✅ Revisa los logs en Railway: **Deployments** → **Logs**
-- ✅ Asegúrate de que el `META_LONG_LIVED_ACCESS_TOKEN` no ha expirado
+Falta configurar `META_VERIFY_TOKEN` en Railway o el deploy no fue reiniciado despues de agregarlo.
 
-### Error "Unsupported platform"
+### `401 Unauthorized` desde Make
 
-- ✅ En Make.com, verifica que `platform` sea `"instagram"` o `"facebook"` (minúsculas)
+`MAKE_SECRET` esta configurado en Railway, pero Make no envio el header `x-make-secret` correcto.
 
-## Recursos útiles
+### `422` desde Make
 
-- 📚 [Meta Graph API Docs](https://developers.facebook.com/docs/graph-api)
-- 🚂 [Railway Docs](https://docs.railway.app)
-- ⚙️ [Make.com Integration](https://make.com)
-- 📊 [Google Sheets API](https://developers.google.com/sheets/api)
+El JSON no cumple el formato esperado. Revisa `platform`, `comment_text`, `caption`, `image_url`, `video_url` y `publish_at`.
+
+### Railway no responde
+
+Revisa:
+
+- Deploy logs en Railway.
+- `https://tu-url-railway/health`.
+- Que Railway este construyendo desde el `Dockerfile`.
+- Que no hayas sobrescrito `PORT` con un valor incorrecto.
