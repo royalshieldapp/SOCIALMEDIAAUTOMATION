@@ -25,7 +25,7 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.0.0"
 app = FastAPI(title="SOCIALMEDIAAUTOMATION", version=APP_VERSION)
 
 
@@ -359,7 +359,7 @@ async def verify_meta_webhook(
 ):
     expected_token = get_meta_verify_token()
     if not expected_token:
-        raise HTTPException(status_code=500, detail="META_VERIFY_TOKEN is not configured")
+        raise HTTPException(status_code=403, detail="META_VERIFY_TOKEN is not configured")
 
     if hub_mode == "subscribe" and hub_verify_token == expected_token:
         return PlainTextResponse(content=hub_challenge or "", status_code=200)
