@@ -4,7 +4,7 @@
 
 Backend en **FastAPI** para conectar Meta/Facebook/Instagram con **Make.com** y **Railway**.
 
-El backend funciona como motor de decision: valida webhooks, clasifica comentarios, genera respuestas sugeridas y normaliza payloads de publicacion. La publicacion real y las respuestas en Meta las ejecuta Make.com con sus modulos de Facebook/Instagram o HTTP Graph API.
+El backend valida webhooks, clasifica comentarios y ya puede publicar y responder directamente en Facebook Graph API. Make.com sigue disponible para programacion, Google Sheets e Instagram.
 
 ![Python](https://img.shields.io/badge/Python-3.11+-3776ab?style=flat-square&logo=python)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.104+-009688?style=flat-square&logo=fastapi)
@@ -13,6 +13,13 @@ El backend funciona como motor de decision: valida webhooks, clasifica comentari
 ---
 
 ## Estado actual
+
+Facebook directo disponible:
+
+- `POST /facebook/posts` publica texto, imagen o video en la Page configurada.
+- `POST /facebook/comments/{comment_id}/reply` responde un comentario.
+- `POST /webhook` verifica `X-Hub-Signature-256` antes de aceptar eventos Meta.
+- CI ejecuta la suite completa con `pytest`.
 
 - ✅ `GET /webhook` verifica el webhook de Meta usando `META_VERIFY_TOKEN`.
 - ✅ `POST /webhook` recibe eventos de Meta o payloads normalizados de Make.
@@ -48,8 +55,12 @@ En Railway configura como minimo:
 
 ```env
 META_VERIFY_TOKEN=un_token_seguro_que_tambien_usaras_en_meta
+META_APP_SECRET=secreto_de_la_app_meta
+META_GRAPH_API_VERSION=v25.0
 MAKE_SECRET=un_secreto_para_proteger_llamadas_de_make
-META_LONG_LIVED_ACCESS_TOKEN=token_largo_de_meta
+FACEBOOK_PAGE_ID=id_de_tu_pagina
+FACEBOOK_PAGE_ACCESS_TOKEN=token_de_acceso_de_la_pagina
+FACEBOOK_AUTO_REPLY_ENABLED=false
 ENVIRONMENT=production
 ```
 
@@ -59,7 +70,6 @@ Variables utiles para Make o modulos Meta:
 META_APP_ID=614438388426527
 INSTAGRAM_APP_ID=1280603234240148
 META_BUSINESS_ID=2640495129436229
-FACEBOOK_PAGE_ID=tu_page_id
 INSTAGRAM_BUSINESS_ACCOUNT_ID=tu_ig_business_account_id
 GOOGLE_SHEET_ID=10yqUf1Ch-EoTB97UVdfs4TFb4WPw8KXb22nEWaXp7bs
 POST_ID=
@@ -104,6 +114,42 @@ GET /webhook?hub.mode=subscribe&hub.challenge=CHALLENGE&hub.verify_token=META_VE
 ```
 
 Meta debe recibir el `hub.challenge` como texto plano.
+
+### Publicar directamente en Facebook
+
+Make debe llamar este endpoint en el momento programado. El backend usa el Page
+Access Token guardado en Railway; el token nunca se envia al cliente.
+
+```http
+POST /facebook/posts
+Content-Type: application/json
+x-make-secret: MAKE_SECRET
+
+{
+  "platform": "facebook",
+  "caption": "Nueva publicacion",
+  "image_url": "https://example.com/image.jpg"
+}
+```
+
+Para texto omite `image_url`. Para video usa `video_url`. Envia solo un tipo de
+medio por solicitud.
+
+### Responder directamente un comentario de Facebook
+
+```http
+POST /facebook/comments/COMMENT_ID/reply
+Content-Type: application/json
+x-make-secret: MAKE_SECRET
+
+{
+  "message": "Gracias por escribirnos."
+}
+```
+
+Para respuestas automaticas desde eventos Meta, configura
+`FACEBOOK_AUTO_REPLY_ENABLED=true`. Meta debe enviar una firma valida
+`X-Hub-Signature-256`, calculada con `META_APP_SECRET`.
 
 ### Comentarios desde Make
 
@@ -175,7 +221,7 @@ Escenarios recomendados:
 
 ```bash
 python -m py_compile SOCIALMEDIAAUTOMATION.py
-python -m unittest discover -s tests
+python -m pytest
 ```
 
 GitHub Actions ejecuta estos checks en cada push a `main` y en pull requests.
