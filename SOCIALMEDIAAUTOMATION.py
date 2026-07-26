@@ -15,17 +15,33 @@ Local run:
     uvicorn SOCIALMEDIAAUTOMATION:app --host 0.0.0.0 --port 8000
 """
 
+import hashlib
+import hmac
+import json
+import logging
 import os
 import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import FastAPI, Header, HTTPException, Query, Request
+import httpx
+from fastapi import (
+    BackgroundTasks,
+    FastAPI,
+    Header,
+    HTTPException,
+    Path,
+    Query,
+    Request,
+)
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
-
 APP_VERSION = "2.0.0"
+DEFAULT_META_GRAPH_API_VERSION = "v25.0"
+META_REQUEST_TIMEOUT_SECONDS = 20.0
+META_ID_PATTERN = r"^[A-Za-z0-9_-]+$"
+logger = logging.getLogger("socialmediaautomation")
 app = FastAPI(title="SOCIALMEDIAAUTOMATION", version=APP_VERSION)
 
 
@@ -60,7 +76,9 @@ class CommentPayload(BaseModel):
     )
     post_id_default: Optional[str] = Field(
         default_factory=lambda: os.getenv("POST_ID"),
-        description="Fallback post ID sourced from POST_ID when post_id is not supplied.",
+        description=(
+            "Fallback post ID sourced from POST_ID when post_id is not " "supplied."
+        ),
     )
 
 
@@ -96,7 +114,9 @@ class PublishPayload(BaseModel):
     def only_video_for_facebook(cls, value: Optional[str], info):
         platform = info.data.get("platform")
         if value and platform == "instagram":
-            raise ValueError("video_url is currently supported only for facebook in this backend")
+            raise ValueError(
+                "video_url is currently supported only for facebook in this backend"
+            )
         return value
 
     @field_validator("publish_at")
@@ -113,6 +133,20 @@ class PublishPayload(BaseModel):
         cleaned = value.strip()
         if not cleaned:
             raise ValueError("caption cannot be empty")
+        return cleaned
+
+
+class FacebookCommentReplyPayload(BaseModel):
+    """Message sent as a reply to an existing Facebook comment."""
+
+    message: str = Field(..., min_length=1, max_length=2000)
+
+    @field_validator("message")
+    @classmethod
+    def validate_message(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("message cannot be empty")
         return cleaned
 
 
@@ -146,8 +180,25 @@ def env_is_set(name: str) -> bool:
 
 
 def get_meta_verify_token() -> Optional[str]:
-    # The legacy key is kept only so old Railway projects do not break abruptly.
-    return os.getenv("META_VERIFY_TOKEN") or os.getenv("royalshield_verify_2026")
+    return os.getenv("META_VERIFY_TOKEN")
+
+
+def get_meta_graph_api_version() -> str:
+    version = os.getenv(
+        "META_GRAPH_API_VERSION", DEFAULT_META_GRAPH_API_VERSION
+    ).strip()
+    if not re.fullmatch(r"v\d+\.\d+", version):
+        raise HTTPException(
+            status_code=503,
+            detail="META_GRAPH_API_VERSION has an invalid format",
+        )
+    return version
+
+
+def get_facebook_page_access_token() -> Optional[str]:
+    return os.getenv("FACEBOOK_PAGE_ACCESS_TOKEN") or os.getenv(
+        "META_LONG_LIVED_ACCESS_TOKEN"
+    )
 
 
 def validation_error_response(exc: ValidationError) -> HTTPException:
@@ -162,19 +213,245 @@ def validation_error_response(exc: ValidationError) -> HTTPException:
     return HTTPException(status_code=422, detail=errors)
 
 
-def verify_make_secret(secret_from_body: Optional[str], x_make_secret: Optional[str]) -> None:
+def verify_make_secret(
+    secret_from_body: Optional[str], x_make_secret: Optional[str]
+) -> None:
     expected_secret = os.getenv("MAKE_SECRET")
     if not expected_secret:
+        if os.getenv("ENVIRONMENT", "development").lower() == "production":
+            raise HTTPException(status_code=503, detail="MAKE_SECRET is not configured")
         return
     received_secret = x_make_secret or secret_from_body
-    if received_secret != expected_secret:
+    if not received_secret or not hmac.compare_digest(received_secret, expected_secret):
         raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+def verify_meta_signature(raw_body: bytes, signature: Optional[str]) -> None:
+    """Verify that a native webhook POST was signed by the configured Meta app."""
+
+    app_secret = os.getenv("META_APP_SECRET")
+    if not app_secret:
+        raise HTTPException(status_code=503, detail="META_APP_SECRET is not configured")
+    if not signature or not signature.startswith("sha256="):
+        raise HTTPException(status_code=401, detail="Invalid Meta webhook signature")
+
+    expected = (
+        "sha256="
+        + hmac.new(
+            app_secret.encode("utf-8"),
+            raw_body,
+            hashlib.sha256,
+        ).hexdigest()
+    )
+    if not hmac.compare_digest(signature, expected):
+        raise HTTPException(status_code=401, detail="Invalid Meta webhook signature")
+
+
+def facebook_auto_reply_enabled() -> bool:
+    return os.getenv("FACEBOOK_AUTO_REPLY_ENABLED", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def require_facebook_config() -> tuple[str, str]:
+    page_id = os.getenv("FACEBOOK_PAGE_ID", "").strip()
+    access_token = (get_facebook_page_access_token() or "").strip()
+    if not page_id or not re.fullmatch(META_ID_PATTERN, page_id):
+        raise HTTPException(
+            status_code=503, detail="FACEBOOK_PAGE_ID is not configured"
+        )
+    if not access_token:
+        raise HTTPException(
+            status_code=503,
+            detail="FACEBOOK_PAGE_ACCESS_TOKEN is not configured",
+        )
+    return page_id, access_token
+
+
+def app_secret_proof(access_token: str) -> Optional[str]:
+    app_secret = os.getenv("META_APP_SECRET")
+    if not app_secret:
+        return None
+    return hmac.new(
+        app_secret.encode("utf-8"),
+        access_token.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+async def facebook_graph_request(
+    edge: str,
+    data: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Send a server-side POST to Meta without exposing access tokens in URLs."""
+
+    _, access_token = require_facebook_config()
+    version = get_meta_graph_api_version()
+    request_data = {**data, "access_token": access_token}
+    proof = app_secret_proof(access_token)
+    if proof:
+        request_data["appsecret_proof"] = proof
+
+    url = f"https://graph.facebook.com/{version}/{edge.lstrip('/')}"
+    try:
+        async with httpx.AsyncClient(
+            timeout=META_REQUEST_TIMEOUT_SECONDS,
+            follow_redirects=False,
+        ) as client:
+            response = await client.post(url, data=request_data)
+    except httpx.RequestError as exc:
+        logger.warning("Meta Graph API request failed: %s", type(exc).__name__)
+        raise HTTPException(
+            status_code=502,
+            detail="Meta Graph API is temporarily unavailable",
+        ) from exc
+
+    try:
+        result = response.json()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Meta Graph API returned an invalid response",
+        ) from exc
+
+    if not isinstance(result, dict):
+        raise HTTPException(
+            status_code=502,
+            detail="Meta Graph API returned an unexpected response",
+        )
+
+    if response.is_error or "error" in result:
+        error = result.get("error")
+        safe_detail = {
+            "message": "Meta Graph API rejected the request",
+            "code": error.get("code") if isinstance(error, dict) else None,
+            "error_subcode": (
+                error.get("error_subcode") if isinstance(error, dict) else None
+            ),
+        }
+        raise HTTPException(status_code=502, detail=safe_detail)
+
+    return result
+
+
+async def publish_facebook_post(payload: PublishPayload) -> Dict[str, Any]:
+    if payload.platform != "facebook":
+        raise HTTPException(status_code=422, detail="platform must be facebook")
+    if payload.image_url and payload.video_url:
+        raise HTTPException(
+            status_code=422,
+            detail="Provide only one of image_url or video_url",
+        )
+    if payload.publish_at:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Direct Facebook publishing expects Make to call this endpoint "
+                "at the scheduled time; omit publish_at"
+            ),
+        )
+
+    page_id, _ = require_facebook_config()
+    if payload.video_url:
+        edge = f"{page_id}/videos"
+        data = {"file_url": payload.video_url, "description": payload.caption}
+    elif payload.image_url:
+        edge = f"{page_id}/photos"
+        data = {"url": payload.image_url, "caption": payload.caption}
+    else:
+        edge = f"{page_id}/feed"
+        data = {"message": payload.caption}
+    return await facebook_graph_request(edge=edge, data=data)
+
+
+async def reply_to_facebook_comment(comment_id: str, message: str) -> Dict[str, Any]:
+    require_facebook_config()
+    if not re.fullmatch(META_ID_PATTERN, comment_id):
+        raise HTTPException(status_code=422, detail="Invalid Facebook comment ID")
+    return await facebook_graph_request(
+        edge=f"{comment_id}/comments",
+        data={"message": message},
+    )
+
+
+def extract_facebook_comment_events(body: Dict[str, Any]) -> List[CommentPayload]:
+    """Normalize Page feed comment events delivered by Meta webhooks."""
+
+    if body.get("object") != "page":
+        return []
+
+    events: List[CommentPayload] = []
+    for entry in body.get("entry", []):
+        if not isinstance(entry, dict):
+            continue
+        page_id = str(entry.get("id", ""))
+        for change in entry.get("changes", []):
+            if not isinstance(change, dict) or change.get("field") != "feed":
+                continue
+            value = change.get("value")
+            if not isinstance(value, dict):
+                continue
+            actor = value.get("from") if isinstance(value.get("from"), dict) else {}
+            if (
+                value.get("item") != "comment"
+                or value.get("verb") != "add"
+                or str(actor.get("id", "")) == page_id
+            ):
+                continue
+            try:
+                events.append(
+                    CommentPayload(
+                        platform="facebook",
+                        comment_id=str(value["comment_id"]),
+                        comment_text=str(value.get("message", "")),
+                        user_name=str(actor.get("name", "Facebook user")),
+                        timestamp=(
+                            str(value["created_time"])
+                            if value.get("created_time") is not None
+                            else None
+                        ),
+                        post_id=(
+                            str(value["post_id"])
+                            if value.get("post_id") is not None
+                            else None
+                        ),
+                    )
+                )
+            except (KeyError, ValidationError):
+                continue
+    return events
+
+
+async def process_facebook_comment_events(events: List[CommentPayload]) -> None:
+    """Auto-reply after Meta has received a fast webhook acknowledgement."""
+
+    for event in events:
+        category = classify_comment(event.comment_text)
+        if action_for_category(category) != "auto_reply":
+            continue
+        try:
+            await reply_to_facebook_comment(
+                comment_id=event.comment_id,
+                message=generate_reply(category, event),
+            )
+        except HTTPException as exc:
+            logger.warning(
+                "Facebook auto-reply failed for comment %s with status %s",
+                event.comment_id,
+                exc.status_code,
+            )
 
 
 def classify_comment(text: str) -> Category:
     lower = text.lower()
 
-    if any(word in lower for word in ["urgent", "urgente", "inmediato", "ayuda", "problema"]):
+    if any(
+        word in lower
+        for word in ["urgent", "urgente", "inmediato", "ayuda", "problema"]
+    ):
         return "urgent"
 
     if any(
@@ -192,7 +469,9 @@ def classify_comment(text: str) -> Category:
     ):
         return "lead"
 
-    if any(word in lower for word in ["soporte", "error", "fallo", "bug", "no funciona"]):
+    if any(
+        word in lower for word in ["soporte", "error", "fallo", "bug", "no funciona"]
+    ):
         return "soporte"
 
     if any(
@@ -275,7 +554,9 @@ def generate_reply(category: Category, payload: CommentPayload) -> str:
 
 
 def build_publish_payload(payload: PublishPayload) -> Dict[str, Any]:
-    media_type = "image" if payload.image_url else "video" if payload.video_url else "text"
+    media_type = (
+        "image" if payload.image_url else "video" if payload.video_url else "text"
+    )
 
     result: Dict[str, Any] = {
         "platform": payload.platform,
@@ -337,13 +618,19 @@ async def config() -> Dict[str, Any]:
         },
         "configured": {
             "META_VERIFY_TOKEN": bool(get_meta_verify_token()),
+            "META_APP_SECRET": env_is_set("META_APP_SECRET"),
             "META_LONG_LIVED_ACCESS_TOKEN": env_is_set("META_LONG_LIVED_ACCESS_TOKEN"),
+            "FACEBOOK_PAGE_ACCESS_TOKEN": bool(get_facebook_page_access_token()),
             "MAKE_SECRET": env_is_set("MAKE_SECRET"),
+            "META_GRAPH_API_VERSION": get_meta_graph_api_version(),
+            "FACEBOOK_AUTO_REPLY_ENABLED": facebook_auto_reply_enabled(),
             "META_APP_ID": env_is_set("META_APP_ID"),
             "INSTAGRAM_APP_ID": env_is_set("INSTAGRAM_APP_ID"),
             "META_BUSINESS_ID": env_is_set("META_BUSINESS_ID"),
             "FACEBOOK_PAGE_ID": env_is_set("FACEBOOK_PAGE_ID"),
-            "INSTAGRAM_BUSINESS_ACCOUNT_ID": env_is_set("INSTAGRAM_BUSINESS_ACCOUNT_ID"),
+            "INSTAGRAM_BUSINESS_ACCOUNT_ID": env_is_set(
+                "INSTAGRAM_BUSINESS_ACCOUNT_ID"
+            ),
             "GOOGLE_SHEET_ID": env_is_set("GOOGLE_SHEET_ID"),
             "POST_ID": env_is_set("POST_ID"),
             "MEDIA_ID": env_is_set("MEDIA_ID"),
@@ -359,7 +646,9 @@ async def verify_meta_webhook(
 ):
     expected_token = get_meta_verify_token()
     if not expected_token:
-        raise HTTPException(status_code=403, detail="META_VERIFY_TOKEN is not configured")
+        raise HTTPException(
+            status_code=403, detail="META_VERIFY_TOKEN is not configured"
+        )
 
     if hub_mode == "subscribe" and hub_verify_token == expected_token:
         return PlainTextResponse(content=hub_challenge or "", status_code=200)
@@ -367,22 +656,79 @@ async def verify_meta_webhook(
     raise HTTPException(status_code=403, detail="Invalid Meta verify token")
 
 
+@app.post("/facebook/posts")
+async def create_facebook_post(
+    payload: PublishPayload,
+    x_make_secret: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    """Publish text, image, or video content directly to the configured Page."""
+
+    verify_make_secret(secret_from_body=None, x_make_secret=x_make_secret)
+    meta_result = await publish_facebook_post(payload)
+    return {
+        "ok": True,
+        "platform": "facebook",
+        "action": "published",
+        "meta_result": meta_result,
+        "received_at": now_iso(),
+    }
+
+
+@app.post("/facebook/comments/{comment_id}/reply")
+async def create_facebook_comment_reply(
+    payload: FacebookCommentReplyPayload,
+    comment_id: str = Path(..., pattern=META_ID_PATTERN),
+    x_make_secret: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    """Reply directly to a Facebook Page comment through Graph API."""
+
+    verify_make_secret(secret_from_body=None, x_make_secret=x_make_secret)
+    meta_result = await reply_to_facebook_comment(comment_id, payload.message)
+    return {
+        "ok": True,
+        "platform": "facebook",
+        "action": "replied",
+        "comment_id": comment_id,
+        "meta_result": meta_result,
+        "received_at": now_iso(),
+    }
+
+
 @app.post("/webhook")
 @app.post("/webhook/make")
-async def handle_webhook(request: Request, x_make_secret: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+async def handle_webhook(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    x_make_secret: Optional[str] = Header(default=None),
+    x_hub_signature_256: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    raw_body = await request.body()
+    if len(raw_body) > 1_000_000:
+        raise HTTPException(status_code=413, detail="Webhook payload is too large")
+
     try:
-        body = await request.json()
-    except Exception as exc:
+        body = json.loads(raw_body)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
 
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="JSON body must be an object")
 
     if "object" in body and "entry" in body:
+        verify_meta_signature(raw_body, x_hub_signature_256)
+        facebook_events = extract_facebook_comment_events(body)
+        auto_reply_queued = facebook_auto_reply_enabled() and bool(facebook_events)
+        if auto_reply_queued:
+            background_tasks.add_task(
+                process_facebook_comment_events,
+                facebook_events,
+            )
         return {
             "ok": True,
             "category": "meta_event",
-            "message": "Meta webhook event received.",
+            "message": "Meta webhook event verified.",
+            "facebook_comment_events": len(facebook_events),
+            "auto_reply_queued": auto_reply_queued,
             "received_at": now_iso(),
         }
 
@@ -404,7 +750,10 @@ async def handle_webhook(request: Request, x_make_secret: Optional[str] = Header
             publish_payload=normalized_payload,
             checklist=[
                 "Verificar token activo de Facebook/Instagram.",
-                "Confirmar permisos: pages_manage_posts, pages_read_engagement, instagram_basic, instagram_content_publish.",
+                (
+                    "Confirmar permisos: pages_manage_posts, pages_read_engagement, "
+                    "instagram_basic, instagram_content_publish."
+                ),
                 "Enviar publish_payload al módulo Make que ejecuta Graph API.",
             ],
             received_at=now_iso(),
