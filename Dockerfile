@@ -18,6 +18,8 @@ COPY --from=builder /root/.local /root/.local
 COPY SOCIALMEDIAAUTOMATION.py .
 COPY scheduler_daemon.py .
 
+RUN mkdir -p /data
+
 ENV PATH=/root/.local/bin:$PATH \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
