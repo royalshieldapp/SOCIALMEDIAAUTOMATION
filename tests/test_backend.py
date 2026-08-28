@@ -24,11 +24,13 @@ def clean_env(tmp_path):
         "FACEBOOK_AUTO_REPLY_ENABLED",
         "INSTAGRAM_AUTO_REPLY_ENABLED",
         "SCHEDULE_DB_PATH",
+        "SCHEDULER_ENABLED",
     ]
     old = {key: os.environ.get(key) for key in keys}
     for key in keys:
         os.environ.pop(key, None)
     os.environ["SCHEDULE_DB_PATH"] = str(tmp_path / "state.db")
+    os.environ["SCHEDULER_ENABLED"] = "false"
     yield
     for key, value in old.items():
         if value is None:
@@ -52,7 +54,7 @@ def test_root_has_no_make(client):
     response = client.get("/")
     assert response.status_code == 200
     assert "make" not in json.dumps(response.json()).lower()
-    assert response.json()["version"] == "3.0.0"
+    assert response.json()["version"] == "3.0.1"
 
 
 def test_mutating_endpoint_fails_closed_without_key(client):
@@ -81,7 +83,7 @@ def test_facebook_publish_calls_graph_api(client):
         }
     )
     with patch.object(
-        mod, "meta_graph_request", new=AsyncMock(return_value={"id": "post_1"})
+        mod, "graph_request", new=AsyncMock(return_value={"id": "post_1"})
     ) as request:
         response = client.post(
             "/facebook/posts",
@@ -91,7 +93,7 @@ def test_facebook_publish_calls_graph_api(client):
     assert response.status_code == 200
     assert response.json()["action"] == "published"
     request.assert_awaited_once_with(
-        edge="page_1/feed", access_token="token", data={"message": "hello"}
+        "page_1/feed", "token", {"message": "hello"}
     )
 
 
@@ -104,7 +106,7 @@ def test_instagram_image_publish_uses_container_then_publish(client):
         }
     )
     graph = AsyncMock(side_effect=[{"id": "container_1"}, {"id": "media_1"}])
-    with patch.object(mod, "meta_graph_request", new=graph):
+    with patch.object(mod, "graph_request", new=graph):
         response = client.post(
             "/instagram/posts",
             headers={"x-automation-key": "key"},
@@ -117,8 +119,8 @@ def test_instagram_image_publish_uses_container_then_publish(client):
     assert response.status_code == 200
     assert response.json()["meta_result"]["container_id"] == "container_1"
     assert graph.await_count == 2
-    assert graph.await_args_list[0].kwargs["edge"] == "ig_1/media"
-    assert graph.await_args_list[1].kwargs["edge"] == "ig_1/media_publish"
+    assert graph.await_args_list[0].args[0] == "ig_1/media"
+    assert graph.await_args_list[1].args[0] == "ig_1/media_publish"
 
 
 def test_instagram_public_comment_reply(client):
@@ -130,7 +132,7 @@ def test_instagram_public_comment_reply(client):
         }
     )
     with patch.object(
-        mod, "meta_graph_request", new=AsyncMock(return_value={"id": "reply_1"})
+        mod, "graph_request", new=AsyncMock(return_value={"id": "reply_1"})
     ) as request:
         response = client.post(
             "/instagram/comments/comment_1/reply",
@@ -139,10 +141,10 @@ def test_instagram_public_comment_reply(client):
         )
     assert response.status_code == 200
     request.assert_awaited_once_with(
-        edge="comment_1/replies",
-        access_token="ig-token",
-        data={"message": "Gracias"},
-        host="graph.instagram.com",
+        "comment_1/replies",
+        "ig-token",
+        {"message": "Gracias"},
+        host="graph.facebook.com",
     )
 
 
@@ -161,7 +163,10 @@ def test_meta_webhook_rejects_bad_signature(client):
 
 def test_instagram_webhook_is_deduplicated(client):
     os.environ.update(
-        {"META_APP_SECRET": "secret", "INSTAGRAM_AUTO_REPLY_ENABLED": "true"}
+        {
+            "META_APP_SECRET": "secret",
+            "INSTAGRAM_AUTO_REPLY_ENABLED": "true",
+        }
     )
     body = {
         "object": "instagram",
@@ -185,7 +190,7 @@ def test_instagram_webhook_is_deduplicated(client):
         "content-type": "application/json",
         "x-hub-signature-256": signature,
     }
-    with patch.object(mod, "process_comment_event", new=AsyncMock()):
+    with patch.object(mod, "process_event", new=AsyncMock()):
         first = client.post("/webhook", content=raw, headers=headers)
         second = client.post("/webhook", content=raw, headers=headers)
     assert first.status_code == 200
@@ -197,7 +202,7 @@ def test_instagram_webhook_is_deduplicated(client):
 def test_future_post_is_scheduled_without_calling_meta(client):
     os.environ["AUTOMATION_API_KEY"] = "key"
     publish_at = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
-    with patch.object(mod, "publish_to_platform", new=AsyncMock()) as publish:
+    with patch.object(mod, "publish", new=AsyncMock()) as publish:
         response = client.post(
             "/posts",
             headers={"x-automation-key": "key"},
@@ -220,15 +225,16 @@ def test_scheduler_publishes_due_post(client):
         caption="due",
         publish_at=(datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat(),
     )
-    mod.state_store.ensure_schema()
-    with mod.state_store._lock, mod.state_store._connect() as conn:
+    mod.state.schema()
+    with mod.state.lock, mod.state.connect() as conn:
         conn.execute(
-            "INSERT INTO scheduled_posts(payload_json, publish_at, created_at) VALUES (?, ?, ?)",
+            "INSERT INTO scheduled_posts(payload_json, publish_at, created_at) "
+            "VALUES (?, ?, ?)",
             (json.dumps(payload.model_dump()), payload.publish_at, mod.now_iso()),
         )
         conn.commit()
     with patch.object(
-        mod, "publish_to_platform", new=AsyncMock(return_value={"id": "ok"})
+        mod, "publish", new=AsyncMock(return_value={"id": "ok"})
     ) as publish:
         response = client.post(
             "/scheduler/run", headers={"x-automation-key": "key"}
