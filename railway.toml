@@ -1,2 +1,2 @@
 [deploy]
-startCommand = "sh -c 'uvicorn SOCIALMEDIAAUTOMATION:app --host 0.0.0.0 --port ${PORT:-8000}'"
+startCommand = "sh -c 'python scheduler_daemon.py & exec uvicorn SOCIALMEDIAAUTOMATION:app --host 0.0.0.0 --port ${PORT:-8000}'"
