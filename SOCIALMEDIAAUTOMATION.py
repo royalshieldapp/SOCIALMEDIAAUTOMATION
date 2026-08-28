@@ -1,49 +1,35 @@
-"""
-RoyalShield Automation Backend
+"""Royal Shield social media automation backend.
 
-FastAPI backend for Meta / Make.com / Railway.
-
-What it does:
-1. Verifies Meta/Facebook/Instagram webhooks with GET /webhook.
-2. Receives POST webhook requests from Meta or Make.com.
-3. Classifies Facebook/Instagram comments and returns a suggested reply + action.
-4. Validates publish requests and returns a normalized payload for automation modules.
-5. Includes /health and /config for Railway checks and setup verification.
-
-Local run:
-    pip install -r requirements.txt
-    uvicorn SOCIALMEDIAAUTOMATION:app --host 0.0.0.0 --port 8000
+Standalone FastAPI service for Meta, Facebook, Instagram, and Railway.
+Make.com is not required.
 """
 
+from __future__ import annotations
+
+import asyncio
 import hashlib
 import hmac
 import json
 import logging
 import os
 import re
+import sqlite3
+import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 
 import httpx
-from fastapi import (
-    BackgroundTasks,
-    FastAPI,
-    Header,
-    HTTPException,
-    Path,
-    Query,
-    Request,
-)
+from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Path, Query, Request
 from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
-APP_VERSION = "2.0.0"
+APP_VERSION = "3.0.0"
 DEFAULT_META_GRAPH_API_VERSION = "v25.0"
 META_REQUEST_TIMEOUT_SECONDS = 20.0
 META_ID_PATTERN = r"^[A-Za-z0-9_-]+$"
+MAX_WEBHOOK_BYTES = 1_000_000
 logger = logging.getLogger("socialmediaautomation")
 app = FastAPI(title="SOCIALMEDIAAUTOMATION", version=APP_VERSION)
-
 
 Category = Literal[
     "urgent",
@@ -52,79 +38,35 @@ Category = Literal[
     "comentario_publico",
     "spam",
     "irrelevante",
-    "media_post",
     "meta_event",
 ]
-
 Action = Literal["auto_reply", "manual_review", "ignore"]
+Platform = Literal["facebook", "instagram"]
 
 
 class CommentPayload(BaseModel):
-    """Schema for incoming comment payloads from Make."""
-
-    platform: Literal["facebook", "instagram"]
+    platform: Platform
     comment_id: str
     comment_text: str
     user_name: str
-    timestamp: Optional[str] = Field(
-        default=None,
-        description="Optional ISO timestamp when the comment was created.",
-    )
-    post_id: Optional[str] = Field(
-        default=None,
-        description="Optional ID of the publication that received the comment.",
-    )
-    post_id_default: Optional[str] = Field(
-        default_factory=lambda: os.getenv("POST_ID"),
-        description=(
-            "Fallback post ID sourced from POST_ID when post_id is not " "supplied."
-        ),
-    )
+    timestamp: Optional[str] = None
+    post_id: Optional[str] = None
 
 
 class PublishPayload(BaseModel):
-    """Schema for publish payloads sent by Make.com."""
-
-    platform: Literal["facebook", "instagram"] = Field(
-        ..., description="Target platform for publishing."
-    )
+    platform: Platform
     caption: str = Field(..., min_length=1, max_length=2200)
-    image_url: Optional[str] = Field(default=None)
-    video_url: Optional[str] = Field(default=None)
-    publish_at: Optional[str] = Field(
-        default=None,
-        description="Optional ISO timestamp for scheduling.",
-    )
-    media_id: Optional[str] = Field(
-        default_factory=lambda: os.getenv("MEDIA_ID"),
-        description="Optional media container ID supplied by Make or MEDIA_ID.",
-    )
+    image_url: Optional[str] = None
+    video_url: Optional[str] = None
+    publish_at: Optional[str] = None
 
     @field_validator("image_url", "video_url")
     @classmethod
     def validate_media_urls(cls, value: Optional[str]) -> Optional[str]:
-        if value is None or value == "":
+        if not value:
             return None
-        if not re.match(r"^https?://", value):
-            raise ValueError("media URLs must start with http:// or https://")
-        return value
-
-    @field_validator("video_url")
-    @classmethod
-    def only_video_for_facebook(cls, value: Optional[str], info):
-        platform = info.data.get("platform")
-        if value and platform == "instagram":
-            raise ValueError(
-                "video_url is currently supported only for facebook in this backend"
-            )
-        return value
-
-    @field_validator("publish_at")
-    @classmethod
-    def validate_publish_date(cls, value: Optional[str]) -> Optional[str]:
-        if value is None or value == "":
-            return None
-        datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if not re.match(r"^https://", value):
+            raise ValueError("media URLs must start with https://")
         return value
 
     @field_validator("caption")
@@ -135,10 +77,26 @@ class PublishPayload(BaseModel):
             raise ValueError("caption cannot be empty")
         return cleaned
 
+    @field_validator("publish_at")
+    @classmethod
+    def validate_publish_at(cls, value: Optional[str]) -> Optional[str]:
+        if not value:
+            return None
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            raise ValueError("publish_at must include a timezone")
+        return parsed.astimezone(timezone.utc).isoformat()
 
-class FacebookCommentReplyPayload(BaseModel):
-    """Message sent as a reply to an existing Facebook comment."""
+    @model_validator(mode="after")
+    def validate_platform_media(self):
+        if self.image_url and self.video_url:
+            raise ValueError("provide only one of image_url or video_url")
+        if self.platform == "instagram" and not (self.image_url or self.video_url):
+            raise ValueError("Instagram publishing requires image_url or video_url")
+        return self
 
+
+class CommentReplyPayload(BaseModel):
     message: str = Field(..., min_length=1, max_length=2000)
 
     @field_validator("message")
@@ -150,24 +108,123 @@ class FacebookCommentReplyPayload(BaseModel):
         return cleaned
 
 
-class ClassificationResponse(BaseModel):
-    ok: bool = True
-    category: Category
-    action: Action
-    reply: str
-    tags: List[str]
-    make_next_step: str
-    received_at: str
+class StateStore:
+    """SQLite state store for idempotency and scheduled posts."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+
+    @property
+    def path(self) -> str:
+        return os.getenv("SCHEDULE_DB_PATH", "/tmp/socialmediaautomation.db")
+
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.path, timeout=5)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+        return conn
+
+    def ensure_schema(self) -> None:
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS processed_events (
+                    event_key TEXT PRIMARY KEY,
+                    processed_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS scheduled_posts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    payload_json TEXT NOT NULL,
+                    publish_at TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT,
+                    created_at TEXT NOT NULL,
+                    published_at TEXT
+                )
+                """
+            )
+            conn.commit()
+
+    def claim_event(self, event_key: str) -> bool:
+        self.ensure_schema()
+        try:
+            with self._lock, self._connect() as conn:
+                conn.execute(
+                    "INSERT INTO processed_events(event_key, processed_at) VALUES (?, ?)",
+                    (event_key, now_iso()),
+                )
+                conn.commit()
+            return True
+        except sqlite3.IntegrityError:
+            return False
+
+    def schedule(self, payload: PublishPayload) -> int:
+        if not payload.publish_at:
+            raise ValueError("publish_at is required")
+        self.ensure_schema()
+        with self._lock, self._connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO scheduled_posts(payload_json, publish_at, created_at)
+                VALUES (?, ?, ?)
+                """,
+                (json.dumps(payload.model_dump()), payload.publish_at, now_iso()),
+            )
+            conn.commit()
+            return int(cursor.lastrowid)
+
+    def due_posts(self, limit: int = 20) -> List[sqlite3.Row]:
+        self.ensure_schema()
+        with self._lock, self._connect() as conn:
+            return list(
+                conn.execute(
+                    """
+                    SELECT * FROM scheduled_posts
+                    WHERE status = 'pending' AND publish_at <= ?
+                    ORDER BY publish_at ASC
+                    LIMIT ?
+                    """,
+                    (now_iso(), limit),
+                ).fetchall()
+            )
+
+    def mark_published(self, post_id: int) -> None:
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE scheduled_posts
+                SET status='published', published_at=?, last_error=NULL
+                WHERE id=?
+                """,
+                (now_iso(), post_id),
+            )
+            conn.commit()
+
+    def mark_failed(self, post_id: int, error: str) -> None:
+        with self._lock, self._connect() as conn:
+            row = conn.execute(
+                "SELECT attempts FROM scheduled_posts WHERE id=?", (post_id,)
+            ).fetchone()
+            attempts = (int(row["attempts"]) if row else 0) + 1
+            status = "failed" if attempts >= 5 else "pending"
+            conn.execute(
+                """
+                UPDATE scheduled_posts
+                SET attempts=?, status=?, last_error=?
+                WHERE id=?
+                """,
+                (attempts, status, error[:500], post_id),
+            )
+            conn.commit()
 
 
-class PublishResponse(BaseModel):
-    ok: bool = True
-    category: Category = "media_post"
-    action: Literal["publish_now", "schedule_post"]
-    platform: Literal["facebook", "instagram"]
-    publish_payload: Dict[str, Any]
-    checklist: List[str]
-    received_at: str
+state_store = StateStore()
 
 
 def now_iso() -> str:
@@ -179,18 +236,22 @@ def env_is_set(name: str) -> bool:
     return bool(value and value.strip())
 
 
+def bool_env(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def get_meta_verify_token() -> Optional[str]:
     return os.getenv("META_VERIFY_TOKEN")
 
 
 def get_meta_graph_api_version() -> str:
-    version = os.getenv(
-        "META_GRAPH_API_VERSION", DEFAULT_META_GRAPH_API_VERSION
-    ).strip()
+    version = os.getenv("META_GRAPH_API_VERSION", DEFAULT_META_GRAPH_API_VERSION).strip()
     if not re.fullmatch(r"v\d+\.\d+", version):
         raise HTTPException(
-            status_code=503,
-            detail="META_GRAPH_API_VERSION has an invalid format",
+            status_code=503, detail="META_GRAPH_API_VERSION has an invalid format"
         )
     return version
 
@@ -201,128 +262,107 @@ def get_facebook_page_access_token() -> Optional[str]:
     )
 
 
-def validation_error_response(exc: ValidationError) -> HTTPException:
-    errors = [
-        {
-            "loc": error.get("loc", []),
-            "msg": error.get("msg", "Invalid value"),
-            "type": error.get("type", "value_error"),
-        }
-        for error in exc.errors()
-    ]
-    return HTTPException(status_code=422, detail=errors)
+def get_instagram_access_token() -> Optional[str]:
+    return (
+        os.getenv("INSTAGRAM_ACCESS_TOKEN")
+        or os.getenv("FACEBOOK_PAGE_ACCESS_TOKEN")
+        or os.getenv("META_LONG_LIVED_ACCESS_TOKEN")
+    )
 
 
-def verify_make_secret(
-    secret_from_body: Optional[str], x_make_secret: Optional[str]
-) -> None:
-    expected_secret = os.getenv("MAKE_SECRET")
-    if not expected_secret:
-        if os.getenv("ENVIRONMENT", "development").lower() == "production":
-            raise HTTPException(status_code=503, detail="MAKE_SECRET is not configured")
-        return
-    received_secret = x_make_secret or secret_from_body
-    if not received_secret or not hmac.compare_digest(received_secret, expected_secret):
+def require_automation_key(x_automation_key: Optional[str]) -> None:
+    expected = (os.getenv("AUTOMATION_API_KEY") or "").strip()
+    if not expected:
+        raise HTTPException(status_code=503, detail="AUTOMATION_API_KEY is not configured")
+    if not x_automation_key or not hmac.compare_digest(x_automation_key, expected):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
 def verify_meta_signature(raw_body: bytes, signature: Optional[str]) -> None:
-    """Verify that a native webhook POST was signed by the configured Meta app."""
-
-    app_secret = os.getenv("META_APP_SECRET")
+    app_secret = (os.getenv("META_APP_SECRET") or "").strip()
     if not app_secret:
         raise HTTPException(status_code=503, detail="META_APP_SECRET is not configured")
     if not signature or not signature.startswith("sha256="):
         raise HTTPException(status_code=401, detail="Invalid Meta webhook signature")
-
-    expected = (
-        "sha256="
-        + hmac.new(
-            app_secret.encode("utf-8"),
-            raw_body,
-            hashlib.sha256,
-        ).hexdigest()
-    )
+    expected = "sha256=" + hmac.new(
+        app_secret.encode(), raw_body, hashlib.sha256
+    ).hexdigest()
     if not hmac.compare_digest(signature, expected):
         raise HTTPException(status_code=401, detail="Invalid Meta webhook signature")
 
 
-def facebook_auto_reply_enabled() -> bool:
-    return os.getenv("FACEBOOK_AUTO_REPLY_ENABLED", "false").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-
-
-def require_facebook_config() -> tuple[str, str]:
-    page_id = os.getenv("FACEBOOK_PAGE_ID", "").strip()
-    access_token = (get_facebook_page_access_token() or "").strip()
-    if not page_id or not re.fullmatch(META_ID_PATTERN, page_id):
-        raise HTTPException(
-            status_code=503, detail="FACEBOOK_PAGE_ID is not configured"
-        )
-    if not access_token:
-        raise HTTPException(
-            status_code=503,
-            detail="FACEBOOK_PAGE_ACCESS_TOKEN is not configured",
-        )
-    return page_id, access_token
-
-
 def app_secret_proof(access_token: str) -> Optional[str]:
-    app_secret = os.getenv("META_APP_SECRET")
+    app_secret = (os.getenv("META_APP_SECRET") or "").strip()
     if not app_secret:
         return None
     return hmac.new(
-        app_secret.encode("utf-8"),
-        access_token.encode("utf-8"),
-        hashlib.sha256,
+        app_secret.encode(), access_token.encode(), hashlib.sha256
     ).hexdigest()
 
 
-async def facebook_graph_request(
+def require_facebook_config() -> tuple[str, str]:
+    page_id = (os.getenv("FACEBOOK_PAGE_ID") or "").strip()
+    token = (get_facebook_page_access_token() or "").strip()
+    if not page_id or not re.fullmatch(META_ID_PATTERN, page_id):
+        raise HTTPException(status_code=503, detail="FACEBOOK_PAGE_ID is not configured")
+    if not token:
+        raise HTTPException(
+            status_code=503, detail="FACEBOOK_PAGE_ACCESS_TOKEN is not configured"
+        )
+    return page_id, token
+
+
+def require_instagram_config() -> tuple[str, str]:
+    account_id = (os.getenv("INSTAGRAM_BUSINESS_ACCOUNT_ID") or "").strip()
+    token = (get_instagram_access_token() or "").strip()
+    if not account_id or not re.fullmatch(META_ID_PATTERN, account_id):
+        raise HTTPException(
+            status_code=503, detail="INSTAGRAM_BUSINESS_ACCOUNT_ID is not configured"
+        )
+    if not token:
+        raise HTTPException(status_code=503, detail="INSTAGRAM_ACCESS_TOKEN is not configured")
+    return account_id, token
+
+
+async def meta_graph_request(
+    *,
     edge: str,
-    data: Dict[str, Any],
+    access_token: str,
+    method: Literal["GET", "POST"] = "POST",
+    data: Optional[Dict[str, Any]] = None,
+    host: str = "graph.facebook.com",
 ) -> Dict[str, Any]:
-    """Send a server-side POST to Meta without exposing access tokens in URLs."""
-
-    _, access_token = require_facebook_config()
     version = get_meta_graph_api_version()
-    request_data = {**data, "access_token": access_token}
+    request_data: Dict[str, Any] = dict(data or {})
+    request_data["access_token"] = access_token
     proof = app_secret_proof(access_token)
-    if proof:
+    if proof and host == "graph.facebook.com":
         request_data["appsecret_proof"] = proof
-
-    url = f"https://graph.facebook.com/{version}/{edge.lstrip('/')}"
+    url = f"https://{host}/{version}/{edge.lstrip('/')}"
     try:
         async with httpx.AsyncClient(
-            timeout=META_REQUEST_TIMEOUT_SECONDS,
-            follow_redirects=False,
+            timeout=META_REQUEST_TIMEOUT_SECONDS, follow_redirects=False
         ) as client:
-            response = await client.post(url, data=request_data)
+            if method == "GET":
+                response = await client.get(url, params=request_data)
+            else:
+                response = await client.post(url, data=request_data)
     except httpx.RequestError as exc:
         logger.warning("Meta Graph API request failed: %s", type(exc).__name__)
         raise HTTPException(
-            status_code=502,
-            detail="Meta Graph API is temporarily unavailable",
+            status_code=502, detail="Meta Graph API is temporarily unavailable"
         ) from exc
 
     try:
         result = response.json()
     except ValueError as exc:
         raise HTTPException(
-            status_code=502,
-            detail="Meta Graph API returned an invalid response",
+            status_code=502, detail="Meta Graph API returned an invalid response"
         ) from exc
-
     if not isinstance(result, dict):
         raise HTTPException(
-            status_code=502,
-            detail="Meta Graph API returned an unexpected response",
+            status_code=502, detail="Meta Graph API returned an unexpected response"
         )
-
     if response.is_error or "error" in result:
         error = result.get("error")
         safe_detail = {
@@ -333,28 +373,13 @@ async def facebook_graph_request(
             ),
         }
         raise HTTPException(status_code=502, detail=safe_detail)
-
     return result
 
 
 async def publish_facebook_post(payload: PublishPayload) -> Dict[str, Any]:
     if payload.platform != "facebook":
         raise HTTPException(status_code=422, detail="platform must be facebook")
-    if payload.image_url and payload.video_url:
-        raise HTTPException(
-            status_code=422,
-            detail="Provide only one of image_url or video_url",
-        )
-    if payload.publish_at:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                "Direct Facebook publishing expects Make to call this endpoint "
-                "at the scheduled time; omit publish_at"
-            ),
-        )
-
-    page_id, _ = require_facebook_config()
+    page_id, token = require_facebook_config()
     if payload.video_url:
         edge = f"{page_id}/videos"
         data = {"file_url": payload.video_url, "description": payload.caption}
@@ -364,25 +389,97 @@ async def publish_facebook_post(payload: PublishPayload) -> Dict[str, Any]:
     else:
         edge = f"{page_id}/feed"
         data = {"message": payload.caption}
-    return await facebook_graph_request(edge=edge, data=data)
+    return await meta_graph_request(edge=edge, access_token=token, data=data)
+
+
+async def publish_instagram_post(payload: PublishPayload) -> Dict[str, Any]:
+    if payload.platform != "instagram":
+        raise HTTPException(status_code=422, detail="platform must be instagram")
+    account_id, token = require_instagram_config()
+    container_data: Dict[str, Any] = {"caption": payload.caption}
+    is_video = bool(payload.video_url)
+    if payload.video_url:
+        container_data.update({"media_type": "REELS", "video_url": payload.video_url})
+    elif payload.image_url:
+        container_data["image_url"] = payload.image_url
+    else:
+        raise HTTPException(
+            status_code=422, detail="Instagram requires image_url or video_url"
+        )
+
+    container = await meta_graph_request(
+        edge=f"{account_id}/media", access_token=token, data=container_data
+    )
+    creation_id = str(container.get("id") or "")
+    if not creation_id or not re.fullmatch(META_ID_PATTERN, creation_id):
+        raise HTTPException(
+            status_code=502, detail="Instagram did not return a valid media container ID"
+        )
+
+    if is_video:
+        for attempt in range(10):
+            status = await meta_graph_request(
+                edge=creation_id,
+                access_token=token,
+                method="GET",
+                data={"fields": "status_code,status"},
+            )
+            status_code = str(status.get("status_code") or "").upper()
+            if status_code == "FINISHED":
+                break
+            if status_code in {"ERROR", "EXPIRED"}:
+                raise HTTPException(
+                    status_code=502,
+                    detail="Instagram media container processing failed",
+                )
+            if attempt == 9:
+                raise HTTPException(
+                    status_code=504,
+                    detail="Instagram media container is not ready yet",
+                )
+            await asyncio.sleep(2)
+
+    published = await meta_graph_request(
+        edge=f"{account_id}/media_publish",
+        access_token=token,
+        data={"creation_id": creation_id},
+    )
+    return {"container_id": creation_id, "media": published}
+
+
+async def publish_to_platform(payload: PublishPayload) -> Dict[str, Any]:
+    immediate = payload.model_copy(update={"publish_at": None})
+    if payload.platform == "facebook":
+        return await publish_facebook_post(immediate)
+    return await publish_instagram_post(immediate)
 
 
 async def reply_to_facebook_comment(comment_id: str, message: str) -> Dict[str, Any]:
-    require_facebook_config()
+    _, token = require_facebook_config()
     if not re.fullmatch(META_ID_PATTERN, comment_id):
         raise HTTPException(status_code=422, detail="Invalid Facebook comment ID")
-    return await facebook_graph_request(
+    return await meta_graph_request(
         edge=f"{comment_id}/comments",
+        access_token=token,
         data={"message": message},
     )
 
 
-def extract_facebook_comment_events(body: Dict[str, Any]) -> List[CommentPayload]:
-    """Normalize Page feed comment events delivered by Meta webhooks."""
+async def reply_to_instagram_comment(comment_id: str, message: str) -> Dict[str, Any]:
+    _, token = require_instagram_config()
+    if not re.fullmatch(META_ID_PATTERN, comment_id):
+        raise HTTPException(status_code=422, detail="Invalid Instagram comment ID")
+    return await meta_graph_request(
+        edge=f"{comment_id}/replies",
+        access_token=token,
+        data={"message": message},
+        host="graph.instagram.com",
+    )
 
+
+def extract_facebook_comment_events(body: Dict[str, Any]) -> List[CommentPayload]:
     if body.get("object") != "page":
         return []
-
     events: List[CommentPayload] = []
     for entry in body.get("entry", []):
         if not isinstance(entry, dict):
@@ -395,11 +492,9 @@ def extract_facebook_comment_events(body: Dict[str, Any]) -> List[CommentPayload
             if not isinstance(value, dict):
                 continue
             actor = value.get("from") if isinstance(value.get("from"), dict) else {}
-            if (
-                value.get("item") != "comment"
-                or value.get("verb") != "add"
-                or str(actor.get("id", "")) == page_id
-            ):
+            if value.get("item") != "comment" or value.get("verb") != "add":
+                continue
+            if str(actor.get("id", "")) == page_id:
                 continue
             try:
                 events.append(
@@ -409,12 +504,12 @@ def extract_facebook_comment_events(body: Dict[str, Any]) -> List[CommentPayload
                         comment_text=str(value.get("message", "")),
                         user_name=str(actor.get("name", "Facebook user")),
                         timestamp=(
-                            str(value["created_time"])
+                            str(value.get("created_time"))
                             if value.get("created_time") is not None
                             else None
                         ),
                         post_id=(
-                            str(value["post_id"])
+                            str(value.get("post_id"))
                             if value.get("post_id") is not None
                             else None
                         ),
@@ -425,35 +520,59 @@ def extract_facebook_comment_events(body: Dict[str, Any]) -> List[CommentPayload
     return events
 
 
-async def process_facebook_comment_events(events: List[CommentPayload]) -> None:
-    """Auto-reply after Meta has received a fast webhook acknowledgement."""
-
-    for event in events:
-        category = classify_comment(event.comment_text)
-        if action_for_category(category) != "auto_reply":
+def extract_instagram_comment_events(body: Dict[str, Any]) -> List[CommentPayload]:
+    if body.get("object") != "instagram":
+        return []
+    events: List[CommentPayload] = []
+    for entry in body.get("entry", []):
+        if not isinstance(entry, dict):
             continue
-        try:
-            await reply_to_facebook_comment(
-                comment_id=event.comment_id,
-                message=generate_reply(category, event),
-            )
-        except HTTPException as exc:
-            logger.warning(
-                "Facebook auto-reply failed for comment %s with status %s",
-                event.comment_id,
-                exc.status_code,
-            )
+        candidates: List[Dict[str, Any]] = []
+        if entry.get("field") in {"comments", "live_comments"}:
+            candidates.append(entry)
+        candidates.extend(
+            c for c in entry.get("changes", []) if isinstance(c, dict)
+        )
+        for change in candidates:
+            if change.get("field") not in {"comments", "live_comments"}:
+                continue
+            value = change.get("value")
+            if not isinstance(value, dict):
+                continue
+            actor = value.get("from") if isinstance(value.get("from"), dict) else {}
+            media = value.get("media") if isinstance(value.get("media"), dict) else {}
+            comment_id = value.get("id")
+            if not comment_id:
+                continue
+            try:
+                events.append(
+                    CommentPayload(
+                        platform="instagram",
+                        comment_id=str(comment_id),
+                        comment_text=str(value.get("text", "")),
+                        user_name=str(actor.get("username") or "Instagram user"),
+                        timestamp=(
+                            str(entry.get("time"))
+                            if entry.get("time") is not None
+                            else None
+                        ),
+                        post_id=(
+                            str(media.get("id")) if media.get("id") is not None else None
+                        ),
+                    )
+                )
+            except ValidationError:
+                continue
+    return events
 
 
 def classify_comment(text: str) -> Category:
     lower = text.lower()
-
     if any(
         word in lower
         for word in ["urgent", "urgente", "inmediato", "ayuda", "problema"]
     ):
         return "urgent"
-
     if any(
         word in lower
         for word in [
@@ -468,12 +587,10 @@ def classify_comment(text: str) -> Category:
         ]
     ):
         return "lead"
-
     if any(
         word in lower for word in ["soporte", "error", "fallo", "bug", "no funciona"]
     ):
         return "soporte"
-
     if any(
         word in lower
         for word in [
@@ -487,7 +604,6 @@ def classify_comment(text: str) -> Category:
         ]
     ):
         return "spam"
-
     if any(
         word in lower
         for word in [
@@ -500,7 +616,6 @@ def classify_comment(text: str) -> Category:
         ]
     ):
         return "comentario_publico"
-
     return "irrelevante"
 
 
@@ -512,21 +627,8 @@ def action_for_category(category: Category) -> Action:
     return "ignore"
 
 
-def tags_for_category(category: Category) -> List[str]:
-    mapping = {
-        "urgent": ["prioridad_alta", "atencion_inmediata"],
-        "lead": ["posible_cliente", "ventas"],
-        "soporte": ["ticket_soporte"],
-        "comentario_publico": ["engagement"],
-        "spam": ["seguridad", "revision"],
-        "irrelevante": ["sin_accion"],
-    }
-    return mapping.get(category, ["sin_accion"])
-
-
 def generate_reply(category: Category, payload: CommentPayload) -> str:
     name = payload.user_name.split()[0] if payload.user_name else "Hola"
-
     if category == "urgent":
         return (
             f"Hola {name}, sentimos que estés teniendo dificultades. "
@@ -549,28 +651,38 @@ def generate_reply(category: Category, payload: CommentPayload) -> str:
             f"Hola {name}, tu comentario fue marcado para revisión de seguridad. "
             "Si necesitas ayuda real, escríbenos por nuestros canales oficiales."
         )
-
     return f"Hola {name}, gracias por comentar."
 
 
-def build_publish_payload(payload: PublishPayload) -> Dict[str, Any]:
-    media_type = (
-        "image" if payload.image_url else "video" if payload.video_url else "text"
-    )
+async def process_comment_event(event: CommentPayload) -> None:
+    category = classify_comment(event.comment_text)
+    if action_for_category(category) != "auto_reply":
+        return
+    try:
+        if event.platform == "facebook":
+            await reply_to_facebook_comment(
+                event.comment_id, generate_reply(category, event)
+            )
+        else:
+            await reply_to_instagram_comment(
+                event.comment_id, generate_reply(category, event)
+            )
+    except HTTPException as exc:
+        logger.warning(
+            "%s auto-reply failed for %s with status %s",
+            event.platform,
+            event.comment_id,
+            exc.status_code,
+        )
 
-    result: Dict[str, Any] = {
-        "platform": payload.platform,
-        "caption": payload.caption,
-        "media_type": media_type,
-        "image_url": payload.image_url,
-        "video_url": payload.video_url,
-        "publish_at": payload.publish_at,
-    }
 
-    if payload.media_id:
-        result["media_id"] = payload.media_id
-
-    return result
+def schedule_or_due(payload: PublishPayload) -> tuple[bool, Optional[int]]:
+    if not payload.publish_at:
+        return False, None
+    when = datetime.fromisoformat(payload.publish_at)
+    if when <= datetime.now(timezone.utc):
+        return False, None
+    return True, state_store.schedule(payload)
 
 
 @app.get("/")
@@ -579,17 +691,12 @@ async def root() -> Dict[str, Any]:
         "ok": True,
         "service": "SOCIALMEDIAAUTOMATION",
         "version": APP_VERSION,
+        "architecture": "standalone-meta-graph-api",
         "health": "/health",
         "config": "/config",
         "webhook": "/webhook",
-        "make_webhook": "/webhook/make",
-        "required_publish_fields": [
-            "platform",
-            "caption",
-            "image_url or video_url (optional for text posts)",
-            "publish_at (optional)",
-            "media_id (optional; overrides MEDIA_ID env var)",
-        ],
+        "publish": "/posts",
+        "scheduler": "/scheduler/run",
     }
 
 
@@ -610,30 +717,20 @@ async def config() -> Dict[str, Any]:
         "service": "SOCIALMEDIAAUTOMATION",
         "version": APP_VERSION,
         "environment": os.getenv("ENVIRONMENT", "development"),
-        "endpoints": {
-            "health": "/health",
-            "meta_verify": "/webhook",
-            "make_webhook": "/webhook/make",
-            "docs": "/docs",
-        },
         "configured": {
             "META_VERIFY_TOKEN": bool(get_meta_verify_token()),
             "META_APP_SECRET": env_is_set("META_APP_SECRET"),
-            "META_LONG_LIVED_ACCESS_TOKEN": env_is_set("META_LONG_LIVED_ACCESS_TOKEN"),
-            "FACEBOOK_PAGE_ACCESS_TOKEN": bool(get_facebook_page_access_token()),
-            "MAKE_SECRET": env_is_set("MAKE_SECRET"),
             "META_GRAPH_API_VERSION": get_meta_graph_api_version(),
-            "FACEBOOK_AUTO_REPLY_ENABLED": facebook_auto_reply_enabled(),
-            "META_APP_ID": env_is_set("META_APP_ID"),
-            "INSTAGRAM_APP_ID": env_is_set("INSTAGRAM_APP_ID"),
-            "META_BUSINESS_ID": env_is_set("META_BUSINESS_ID"),
+            "AUTOMATION_API_KEY": env_is_set("AUTOMATION_API_KEY"),
             "FACEBOOK_PAGE_ID": env_is_set("FACEBOOK_PAGE_ID"),
+            "FACEBOOK_PAGE_ACCESS_TOKEN": bool(get_facebook_page_access_token()),
+            "FACEBOOK_AUTO_REPLY_ENABLED": bool_env("FACEBOOK_AUTO_REPLY_ENABLED"),
             "INSTAGRAM_BUSINESS_ACCOUNT_ID": env_is_set(
                 "INSTAGRAM_BUSINESS_ACCOUNT_ID"
             ),
-            "GOOGLE_SHEET_ID": env_is_set("GOOGLE_SHEET_ID"),
-            "POST_ID": env_is_set("POST_ID"),
-            "MEDIA_ID": env_is_set("MEDIA_ID"),
+            "INSTAGRAM_ACCESS_TOKEN": bool(get_instagram_access_token()),
+            "INSTAGRAM_AUTO_REPLY_ENABLED": bool_env("INSTAGRAM_AUTO_REPLY_ENABLED"),
+            "SCHEDULE_DB_PATH": state_store.path,
         },
     }
 
@@ -649,134 +746,200 @@ async def verify_meta_webhook(
         raise HTTPException(
             status_code=403, detail="META_VERIFY_TOKEN is not configured"
         )
-
     if hub_mode == "subscribe" and hub_verify_token == expected_token:
         return PlainTextResponse(content=hub_challenge or "", status_code=200)
-
     raise HTTPException(status_code=403, detail="Invalid Meta verify token")
+
+
+@app.post("/posts")
+async def create_post(
+    payload: PublishPayload,
+    x_automation_key: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    require_automation_key(x_automation_key)
+    scheduled, schedule_id = schedule_or_due(payload)
+    if scheduled:
+        return {
+            "ok": True,
+            "action": "scheduled",
+            "schedule_id": schedule_id,
+            "publish_at": payload.publish_at,
+            "platform": payload.platform,
+        }
+    result = await publish_to_platform(payload)
+    return {
+        "ok": True,
+        "action": "published",
+        "platform": payload.platform,
+        "meta_result": result,
+        "received_at": now_iso(),
+    }
 
 
 @app.post("/facebook/posts")
 async def create_facebook_post(
     payload: PublishPayload,
-    x_make_secret: Optional[str] = Header(default=None),
+    x_automation_key: Optional[str] = Header(default=None),
 ) -> Dict[str, Any]:
-    """Publish text, image, or video content directly to the configured Page."""
-
-    verify_make_secret(secret_from_body=None, x_make_secret=x_make_secret)
-    meta_result = await publish_facebook_post(payload)
+    require_automation_key(x_automation_key)
+    if payload.platform != "facebook":
+        raise HTTPException(status_code=422, detail="platform must be facebook")
+    scheduled, schedule_id = schedule_or_due(payload)
+    if scheduled:
+        return {
+            "ok": True,
+            "action": "scheduled",
+            "schedule_id": schedule_id,
+            "publish_at": payload.publish_at,
+            "platform": "facebook",
+        }
+    result = await publish_facebook_post(payload.model_copy(update={"publish_at": None}))
     return {
         "ok": True,
-        "platform": "facebook",
         "action": "published",
-        "meta_result": meta_result,
+        "platform": "facebook",
+        "meta_result": result,
+        "received_at": now_iso(),
+    }
+
+
+@app.post("/instagram/posts")
+async def create_instagram_post(
+    payload: PublishPayload,
+    x_automation_key: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    require_automation_key(x_automation_key)
+    if payload.platform != "instagram":
+        raise HTTPException(status_code=422, detail="platform must be instagram")
+    scheduled, schedule_id = schedule_or_due(payload)
+    if scheduled:
+        return {
+            "ok": True,
+            "action": "scheduled",
+            "schedule_id": schedule_id,
+            "publish_at": payload.publish_at,
+            "platform": "instagram",
+        }
+    result = await publish_instagram_post(
+        payload.model_copy(update={"publish_at": None})
+    )
+    return {
+        "ok": True,
+        "action": "published",
+        "platform": "instagram",
+        "meta_result": result,
         "received_at": now_iso(),
     }
 
 
 @app.post("/facebook/comments/{comment_id}/reply")
 async def create_facebook_comment_reply(
-    payload: FacebookCommentReplyPayload,
+    payload: CommentReplyPayload,
     comment_id: str = Path(..., pattern=META_ID_PATTERN),
-    x_make_secret: Optional[str] = Header(default=None),
+    x_automation_key: Optional[str] = Header(default=None),
 ) -> Dict[str, Any]:
-    """Reply directly to a Facebook Page comment through Graph API."""
-
-    verify_make_secret(secret_from_body=None, x_make_secret=x_make_secret)
-    meta_result = await reply_to_facebook_comment(comment_id, payload.message)
+    require_automation_key(x_automation_key)
+    result = await reply_to_facebook_comment(comment_id, payload.message)
     return {
         "ok": True,
         "platform": "facebook",
         "action": "replied",
         "comment_id": comment_id,
-        "meta_result": meta_result,
+        "meta_result": result,
+        "received_at": now_iso(),
+    }
+
+
+@app.post("/instagram/comments/{comment_id}/reply")
+async def create_instagram_comment_reply(
+    payload: CommentReplyPayload,
+    comment_id: str = Path(..., pattern=META_ID_PATTERN),
+    x_automation_key: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    require_automation_key(x_automation_key)
+    result = await reply_to_instagram_comment(comment_id, payload.message)
+    return {
+        "ok": True,
+        "platform": "instagram",
+        "action": "replied",
+        "comment_id": comment_id,
+        "meta_result": result,
+        "received_at": now_iso(),
+    }
+
+
+@app.post("/scheduler/run")
+async def run_scheduler(
+    x_automation_key: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    require_automation_key(x_automation_key)
+    due = state_store.due_posts()
+    published = 0
+    failed = 0
+    for row in due:
+        post_id = int(row["id"])
+        try:
+            payload = PublishPayload(**json.loads(row["payload_json"]))
+            await publish_to_platform(payload)
+            state_store.mark_published(post_id)
+            published += 1
+        except Exception as exc:
+            state_store.mark_failed(post_id, type(exc).__name__)
+            failed += 1
+            logger.exception("Scheduled post %s failed", post_id)
+    return {
+        "ok": True,
+        "checked": len(due),
+        "published": published,
+        "failed": failed,
         "received_at": now_iso(),
     }
 
 
 @app.post("/webhook")
-@app.post("/webhook/make")
 async def handle_webhook(
     request: Request,
     background_tasks: BackgroundTasks,
-    x_make_secret: Optional[str] = Header(default=None),
     x_hub_signature_256: Optional[str] = Header(default=None),
 ) -> Dict[str, Any]:
     raw_body = await request.body()
-    if len(raw_body) > 1_000_000:
+    if len(raw_body) > MAX_WEBHOOK_BYTES:
         raise HTTPException(status_code=413, detail="Webhook payload is too large")
-
     try:
         body = json.loads(raw_body)
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
-
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="JSON body must be an object")
 
-    if "object" in body and "entry" in body:
-        verify_meta_signature(raw_body, x_hub_signature_256)
-        facebook_events = extract_facebook_comment_events(body)
-        auto_reply_queued = facebook_auto_reply_enabled() and bool(facebook_events)
-        if auto_reply_queued:
-            background_tasks.add_task(
-                process_facebook_comment_events,
-                facebook_events,
-            )
-        return {
-            "ok": True,
-            "category": "meta_event",
-            "message": "Meta webhook event verified.",
-            "facebook_comment_events": len(facebook_events),
-            "auto_reply_queued": auto_reply_queued,
-            "received_at": now_iso(),
-        }
+    verify_meta_signature(raw_body, x_hub_signature_256)
+    facebook_events = extract_facebook_comment_events(body)
+    instagram_events = extract_instagram_comment_events(body)
+    queued = 0
+    duplicates = 0
 
-    secret_from_body = body.get("secret")
-    verify_make_secret(secret_from_body=secret_from_body, x_make_secret=x_make_secret)
+    for event in [*facebook_events, *instagram_events]:
+        enabled = (
+            bool_env("FACEBOOK_AUTO_REPLY_ENABLED")
+            if event.platform == "facebook"
+            else bool_env("INSTAGRAM_AUTO_REPLY_ENABLED")
+        )
+        if not enabled:
+            continue
+        event_key = f"{event.platform}:comment:{event.comment_id}"
+        if not state_store.claim_event(event_key):
+            duplicates += 1
+            continue
+        background_tasks.add_task(process_comment_event, event)
+        queued += 1
 
-    if body.get("event_type") == "publish_post" or "caption" in body:
-        try:
-            publish_payload = PublishPayload(**body)
-        except ValidationError as exc:
-            raise validation_error_response(exc) from exc
-
-        normalized_payload = build_publish_payload(publish_payload)
-        action = "schedule_post" if publish_payload.publish_at else "publish_now"
-
-        return PublishResponse(
-            action=action,
-            platform=publish_payload.platform,
-            publish_payload=normalized_payload,
-            checklist=[
-                "Verificar token activo de Facebook/Instagram.",
-                (
-                    "Confirmar permisos: pages_manage_posts, pages_read_engagement, "
-                    "instagram_basic, instagram_content_publish."
-                ),
-                "Enviar publish_payload al módulo Make que ejecuta Graph API.",
-            ],
-            received_at=now_iso(),
-        ).model_dump()
-
-    try:
-        comment_payload = CommentPayload(**body)
-    except ValidationError as exc:
-        raise validation_error_response(exc) from exc
-
-    category = classify_comment(comment_payload.comment_text)
-    action = action_for_category(category)
-    reply = generate_reply(category, comment_payload)
-
-    return ClassificationResponse(
-        category=category,
-        action=action,
-        reply=reply,
-        tags=tags_for_category(category),
-        make_next_step=(
-            "Publicar reply con módulo 'Create Comment Reply' de Make"
-            if action == "auto_reply"
-            else "Enviar a revisión manual"
-        ),
-        received_at=now_iso(),
-    ).model_dump()
+    return {
+        "ok": True,
+        "category": "meta_event",
+        "message": "Meta webhook event verified.",
+        "facebook_comment_events": len(facebook_events),
+        "instagram_comment_events": len(instagram_events),
+        "auto_reply_queued": queued,
+        "duplicates_ignored": duplicates,
+        "received_at": now_iso(),
+    }
