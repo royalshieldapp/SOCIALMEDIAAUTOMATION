@@ -1,269 +1,114 @@
-<!-- markdownlint-disable MD033 MD041 -->
+# Royal Shield Social Media Automation
 
-# 🎯 RoyalShield Social Media Automation
+Standalone FastAPI backend for Royal Shield social-media automation on Railway.
+It connects directly to Meta Graph API for Facebook and Instagram. **Make.com is not required.**
 
-Backend en **FastAPI** para conectar Meta/Facebook/Instagram con **Make.com** y **Railway**.
+## What it does
 
-El backend valida webhooks, clasifica comentarios y ya puede publicar y responder directamente en Facebook Graph API. Make.com sigue disponible para programacion, Google Sheets e Instagram.
+- Verifies Meta webhooks with `META_VERIFY_TOKEN` and `X-Hub-Signature-256`.
+- Publishes Facebook text, image, and video posts directly.
+- Publishes Instagram images and Reels using media container -> `media_publish`.
+- Replies directly to Facebook and Instagram comments.
+- Auto-classifies incoming comments and can auto-reply.
+- Deduplicates webhook comment retries with SQLite.
+- Stores future posts in SQLite and runs the scheduler companion inside the same Railway container.
+- Protects mutating internal endpoints with `AUTOMATION_API_KEY` and fails closed if the key is missing.
 
-![Python](https://img.shields.io/badge/Python-3.11+-3776ab?style=flat-square&logo=python)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.104+-009688?style=flat-square&logo=fastapi)
-![Railway](https://img.shields.io/badge/Railway-ready-0B0D0E?style=flat-square&logo=railway)
+## Main endpoints
 
----
+- `GET /health`
+- `GET /config`
+- `GET /webhook` - Meta verification challenge
+- `POST /webhook` - signed Meta events only
+- `POST /posts` - publish or schedule Facebook/Instagram
+- `POST /facebook/posts`
+- `POST /instagram/posts`
+- `POST /facebook/comments/{comment_id}/reply`
+- `POST /instagram/comments/{comment_id}/reply`
+- `POST /scheduler/run`
 
-## Estado actual
+Internal POST endpoints require:
 
-Facebook directo disponible:
-
-- `POST /facebook/posts` publica texto, imagen o video en la Page configurada.
-- `POST /facebook/comments/{comment_id}/reply` responde un comentario.
-- `POST /webhook` verifica `X-Hub-Signature-256` antes de aceptar eventos Meta.
-- CI ejecuta la suite completa con `pytest`.
-
-- ✅ `GET /webhook` verifica el webhook de Meta usando `META_VERIFY_TOKEN`.
-- ✅ `POST /webhook` recibe eventos de Meta o payloads normalizados de Make.
-- ✅ `POST /webhook/make` existe como alias para escenarios de Make.
-- ✅ `GET /health` sirve como health check de Railway.
-- ✅ `GET /config` confirma variables configuradas sin mostrar secretos.
-- ✅ Docker usa el puerto asignado por Railway con `PORT`.
-- ✅ CI de GitHub compila el backend y corre smoke tests.
-
----
-
-## Quick Start local
-
-```bash
-git clone https://github.com/royalshieldapp/SOCIALMEDIAAUTOMATION.git
-cd SOCIALMEDIAAUTOMATION
-cp .env.example .env
-pip install -r requirements.txt
-uvicorn SOCIALMEDIAAUTOMATION:app --host 0.0.0.0 --port 8000 --reload
+```http
+x-automation-key: <AUTOMATION_API_KEY>
 ```
 
-Abre:
+## Local run
 
-- `http://localhost:8000/health`
-- `http://localhost:8000/config`
-- `http://localhost:8000/docs`
+```bash
+cp .env.example .env
+pip install -r requirements.txt
+uvicorn SOCIALMEDIAAUTOMATION:app --host 0.0.0.0 --port 8000 --reload --env-file .env
+```
 
----
+## Railway variables
 
-## Variables requeridas
-
-En Railway configura como minimo:
+Configure at minimum:
 
 ```env
-META_VERIFY_TOKEN=un_token_seguro_que_tambien_usaras_en_meta
-META_APP_SECRET=secreto_de_la_app_meta
+META_VERIFY_TOKEN=<random-token-used-also-in-meta>
+META_APP_SECRET=<meta-app-secret>
 META_GRAPH_API_VERSION=v25.0
-MAKE_SECRET=un_secreto_para_proteger_llamadas_de_make
-FACEBOOK_PAGE_ID=id_de_tu_pagina
-FACEBOOK_PAGE_ACCESS_TOKEN=token_de_acceso_de_la_pagina
+AUTOMATION_API_KEY=<long-random-secret>
+FACEBOOK_PAGE_ID=<page-id>
+FACEBOOK_PAGE_ACCESS_TOKEN=<page-token>
 FACEBOOK_AUTO_REPLY_ENABLED=false
+INSTAGRAM_BUSINESS_ACCOUNT_ID=<instagram-professional-account-id>
+INSTAGRAM_GRAPH_HOST=graph.facebook.com
+INSTAGRAM_ACCESS_TOKEN=
+INSTAGRAM_AUTO_REPLY_ENABLED=false
+SCHEDULE_DB_PATH=/data/socialmediaautomation.db
+SCHEDULER_ENABLED=true
+SCHEDULER_POLL_SECONDS=30
 ENVIRONMENT=production
 ```
 
-Variables utiles para Make o modulos Meta:
+Do not put real tokens or secrets in GitHub.
+
+## Instagram login mode
+
+This backend supports both current Meta host patterns:
+
+- Facebook Login for Business: `INSTAGRAM_GRAPH_HOST=graph.facebook.com`
+- Instagram Login: `INSTAGRAM_GRAPH_HOST=graph.instagram.com`
+
+Royal Shield currently defaults to Facebook Login because the Instagram Professional account is expected to be linked to a Facebook Page. If a separate Instagram Login token is used, set `INSTAGRAM_ACCESS_TOKEN` and switch the host accordingly.
+
+## Railway Volume
+
+Scheduling and webhook deduplication use SQLite. Attach a Railway Volume mounted at `/data` and keep:
 
 ```env
-META_APP_ID=614438388426527
-INSTAGRAM_APP_ID=1280603234240148
-META_BUSINESS_ID=2640495129436229
-INSTAGRAM_BUSINESS_ACCOUNT_ID=tu_ig_business_account_id
-GOOGLE_SHEET_ID=10yqUf1Ch-EoTB97UVdfs4TFb4WPw8KXb22nEWaXp7bs
-POST_ID=
-MEDIA_ID=
+SCHEDULE_DB_PATH=/data/socialmediaautomation.db
 ```
 
-No guardes tokens reales en el repo. Ponlos solo en Railway, Meta y Make.
+Without a Volume the app can still run, but scheduled/deduplication state can disappear when the container is replaced.
 
----
+## Scheduler
 
-## Endpoints
+`scheduler_daemon.py` runs beside Uvicorn in the same container and calls the protected scheduler endpoint on localhost. No external automation provider is required.
 
-### Health check
+To disable it temporarily:
 
-```http
-GET /health
+```env
+SCHEDULER_ENABLED=false
 ```
 
-Respuesta esperada:
+## Safe rollout
 
-```json
-{
-  "ok": true,
-  "status": "healthy",
-  "environment": "production",
-  "received_at": "2026-06-20T10:15:30.123456+00:00"
-}
-```
+1. Merge the tested branch to `main`.
+2. Let Railway deploy `main`.
+3. Add the new environment variables.
+4. Attach the `/data` Volume before relying on scheduling/deduplication.
+5. Keep Facebook and Instagram auto-replies `false` initially.
+6. Verify `/health` and `/config`.
+7. Verify the Meta callback URL: `https://<railway-domain>/webhook`.
+8. Test one Facebook post, one Instagram post, and one manual comment reply on each platform.
+9. Enable auto-replies one platform at a time.
 
-### Config segura
-
-```http
-GET /config
-```
-
-Devuelve banderas `true/false` para confirmar si las variables existen, sin exponer los valores secretos.
-
-### Verificacion de Meta
-
-```http
-GET /webhook?hub.mode=subscribe&hub.challenge=CHALLENGE&hub.verify_token=META_VERIFY_TOKEN
-```
-
-Meta debe recibir el `hub.challenge` como texto plano.
-
-### Publicar directamente en Facebook
-
-Make debe llamar este endpoint en el momento programado. El backend usa el Page
-Access Token guardado en Railway; el token nunca se envia al cliente.
-
-```http
-POST /facebook/posts
-Content-Type: application/json
-x-make-secret: MAKE_SECRET
-
-{
-  "platform": "facebook",
-  "caption": "Nueva publicacion",
-  "image_url": "https://example.com/image.jpg"
-}
-```
-
-Para texto omite `image_url`. Para video usa `video_url`. Envia solo un tipo de
-medio por solicitud.
-
-### Responder directamente un comentario de Facebook
-
-```http
-POST /facebook/comments/COMMENT_ID/reply
-Content-Type: application/json
-x-make-secret: MAKE_SECRET
-
-{
-  "message": "Gracias por escribirnos."
-}
-```
-
-Para respuestas automaticas desde eventos Meta, configura
-`FACEBOOK_AUTO_REPLY_ENABLED=true`. Meta debe enviar una firma valida
-`X-Hub-Signature-256`, calculada con `META_APP_SECRET`.
-
-### Comentarios desde Make
-
-```http
-POST /webhook
-Content-Type: application/json
-x-make-secret: MAKE_SECRET
-
-{
-  "platform": "instagram",
-  "comment_id": "1234567890",
-  "comment_text": "Quiero precio",
-  "user_name": "Carlos",
-  "post_id": "998877665544",
-  "timestamp": "2026-06-20T10:00:00Z"
-}
-```
-
-El backend responde con `category`, `action`, `reply`, `tags` y `make_next_step`.
-
-### Publicaciones desde Make
-
-```http
-POST /webhook/make
-Content-Type: application/json
-x-make-secret: MAKE_SECRET
-
-{
-  "event_type": "publish_post",
-  "platform": "instagram",
-  "caption": "Nuevo lanzamiento RoyalShield",
-  "image_url": "https://example.com/image.jpg",
-  "publish_at": "2026-06-20T15:00:00Z"
-}
-```
-
-El backend devuelve un `publish_payload` normalizado. Make debe usar ese payload para ejecutar el modulo de Meta/Graph API.
-
----
-
-## Deploy en Railway
-
-Ver la guia completa: [`RAILWAY_SETUP.md`](./RAILWAY_SETUP.md)
-
-Resumen:
-
-1. Crea un proyecto en Railway desde GitHub.
-2. Selecciona `royalshieldapp/SOCIALMEDIAAUTOMATION`.
-3. Configura las variables de entorno.
-4. Railway construira con `Dockerfile` y le pasara `PORT` al contenedor.
-5. Copia la URL publica de Railway.
-6. Configura en Meta el callback `https://tu-url-railway/webhook`.
-7. Configura Make para llamar a `https://tu-url-railway/webhook` o `/webhook/make`.
-
----
-
-## Make.com
-
-Ver la guia completa: [`MAKE_SETUP.md`](./MAKE_SETUP.md)
-
-Escenarios recomendados:
-
-- Comentarios: Meta/Instagram trigger en Make -> backend -> modulo de respuesta en Meta.
-- Publicaciones: Google Sheets -> backend -> modulo de publicacion en Meta -> actualizar estado en Sheets.
-
----
-
-## Testing
+## Tests
 
 ```bash
-python -m py_compile SOCIALMEDIAAUTOMATION.py
+python -m py_compile SOCIALMEDIAAUTOMATION.py scheduler_daemon.py
 python -m pytest
 ```
-
-GitHub Actions ejecuta estos checks en cada push a `main` y en pull requests.
-
----
-
-## Checklist final
-
-- [ ] Railway conectado al repo.
-- [ ] Variables reales configuradas en Railway.
-- [ ] `META_VERIFY_TOKEN` coincide en Railway y Meta.
-- [ ] Webhook de Meta verificado con `https://tu-url-railway/webhook`.
-- [ ] Escenarios de Make creados con `x-make-secret`.
-- [ ] Token largo de Meta vigente y con permisos correctos.
-- [ ] Cuenta Instagram profesional conectada a una Facebook Page.
-- [ ] Prueba real: comentario en Instagram/Facebook -> Make -> backend -> respuesta.
-
----
-
-## Troubleshooting
-
-### `Invalid Meta verify token`
-
-Confirma que `META_VERIFY_TOKEN` en Railway es exactamente el mismo token usado en Meta App Dashboard.
-
-### Make recibe `401 Unauthorized`
-
-Si `MAKE_SECRET` esta configurado en Railway, Make debe enviar el header `x-make-secret` con el mismo valor.
-
-### Make recibe `422`
-
-El JSON esta incompleto o tiene valores invalidos. Revisa `platform`, `caption`, `image_url`, `video_url` y `publish_at`.
-
-### Railway no abre la app
-
-Revisa `/health`, logs del deploy y que el contenedor este usando la variable `PORT`.
-
----
-
-## Recursos
-
-- [Meta Graph API](https://developers.facebook.com/docs/graph-api)
-- [Instagram API](https://developers.facebook.com/docs/instagram-api)
-- [Railway Docs](https://docs.railway.app)
-- [Make.com Docs](https://www.make.com/en/help)

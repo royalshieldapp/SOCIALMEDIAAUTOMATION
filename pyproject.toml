@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "socialmediaautomation"
-version = "2.0.0"
-description = "FastAPI backend for automating social media posts on Facebook/Instagram with Make.com"
+version = "3.0.1"
+description = "Standalone FastAPI backend for Royal Shield Facebook and Instagram automation"
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}
@@ -17,7 +17,7 @@ keywords = [
     "facebook",
     "instagram",
     "automation",
-    "make.com",
+    "meta",
     "railway",
     "social-media"
 ]
@@ -30,13 +30,13 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Framework :: FastAPI",
-    "Topic :: Internet",
 ]
 
 dependencies = [
     "fastapi>=0.104.0",
     "uvicorn[standard]>=0.24.0",
     "pydantic>=2.0",
+    "httpx>=0.25.0",
 ]
 
 [project.optional-dependencies]
@@ -55,12 +55,12 @@ Repository = "https://github.com/royalshieldapp/SOCIALMEDIAAUTOMATION.git"
 Issues = "https://github.com/royalshieldapp/SOCIALMEDIAAUTOMATION/issues"
 
 [tool.black]
-line-length = 88
+line-length = 100
 target-version = ['py311', 'py312']
 
 [tool.isort]
 profile = "black"
-line_length = 88
+line_length = 100
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -25,7 +25,7 @@ jobs:
           pip install pytest
 
       - name: Compile backend
-        run: python -m py_compile SOCIALMEDIAAUTOMATION.py
+        run: python -m py_compile SOCIALMEDIAAUTOMATION.py scheduler_daemon.py
 
       - name: Run complete test suite
         run: python -m pytest
