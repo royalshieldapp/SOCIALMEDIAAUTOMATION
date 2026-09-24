@@ -11,15 +11,23 @@ import os
 import re
 import sqlite3
 import threading
+import ipaddress
+import time
+from collections import deque
+from contextlib import asynccontextmanager, suppress
+from pathlib import Path as FilePath
+from urllib.parse import urlsplit
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 
 import httpx
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Path, Query, Request
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, FileResponse
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
+from editorial import EditorialStore
+import scheduler_daemon
 
-APP_VERSION = "3.0.1"
+APP_VERSION = "3.1.0"
 DEFAULT_META_GRAPH_API_VERSION = "v25.0"
 META_TIMEOUT = 20.0
 META_ID_PATTERN = r"^[A-Za-z0-9_-]+$"
@@ -29,7 +37,25 @@ Category = Literal[
     "urgent", "lead", "soporte", "comentario_publico", "spam", "irrelevante"
 ]
 logger = logging.getLogger("socialmediaautomation")
-app = FastAPI(title="SOCIALMEDIAAUTOMATION", version=APP_VERSION)
+# httpx INFO request logs include query parameters such as appsecret_proof.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+@asynccontextmanager
+async def lifespan(application):
+    task = asyncio.create_task(scheduler_daemon.main()) if scheduler_daemon.enabled() else None
+    application.state.scheduler_task = task
+    try:
+        yield
+    finally:
+        if task is not None:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
+
+app = FastAPI(title="SOCIALMEDIAAUTOMATION", version=APP_VERSION, lifespan=lifespan)
+admin_requests = deque()
+admin_denied_requests = deque()
+admin_rate_lock = threading.Lock()
 
 
 class CommentPayload(BaseModel):
@@ -55,6 +81,16 @@ class PublishPayload(BaseModel):
             return None
         if not value.startswith("https://"):
             raise ValueError("media URLs must start with https://")
+        parsed = urlsplit(value)
+        hostname = parsed.hostname or ""
+        if not hostname or parsed.username or parsed.password or "." not in hostname or hostname.endswith((".localhost", ".local", ".internal")):
+            raise ValueError("media URLs must reference a public host without credentials")
+        try:
+            address = ipaddress.ip_address(hostname)
+        except ValueError:
+            address = None
+        if address is not None and not address.is_global:
+            raise ValueError("media URLs must be public")
         return value
 
     @field_validator("caption")
@@ -163,7 +199,18 @@ def require_automation_key(received: Optional[str]) -> None:
     expected = (os.getenv("AUTOMATION_API_KEY") or "").strip()
     if not expected:
         raise HTTPException(503, "AUTOMATION_API_KEY is not configured")
-    if not received or not hmac.compare_digest(received, expected):
+    authorized = bool(received and hmac.compare_digest(received, expected))
+    # Separate bounded budgets keep invalid credentials from exhausting admin access.
+    # Per-process limit: the existing deployment uses a single Uvicorn worker.
+    with admin_rate_lock:
+        requests = admin_requests if authorized else admin_denied_requests
+        current = time.monotonic()
+        while requests and requests[0] <= current - 60:
+            requests.popleft()
+        if len(requests) >= 120:
+            raise HTTPException(429, "Administrative request limit exceeded", headers={"Retry-After": "60"})
+        requests.append(current)
+    if not authorized:
         raise HTTPException(401, "Unauthorized")
 
 
@@ -196,7 +243,7 @@ async def graph_request(
     host: str = "graph.facebook.com",
 ) -> Dict[str, Any]:
     payload = dict(data or {})
-    payload["access_token"] = token
+    headers = {"Authorization": f"Bearer {token}"}
     proof = appsecret_proof(token, host)
     if proof:
         payload["appsecret_proof"] = proof
@@ -206,9 +253,9 @@ async def graph_request(
             timeout=META_TIMEOUT, follow_redirects=False
         ) as client:
             response = await (
-                client.get(url, params=payload)
+                client.get(url, params=payload, headers=headers)
                 if method == "GET"
-                else client.post(url, data=payload)
+                else client.post(url, data=payload, headers=headers)
             )
     except httpx.RequestError as exc:
         raise HTTPException(
@@ -222,12 +269,24 @@ async def graph_request(
         raise HTTPException(502, "Meta Graph API returned an unexpected response")
     if response.is_error or "error" in body:
         error = body.get("error") if isinstance(body.get("error"), dict) else {}
+        def sanitized(value):
+            if not isinstance(value, str):
+                return None
+            secrets = [token, proof] + [os.getenv(name) for name in (
+                "META_APP_SECRET", "META_LONG_LIVED_ACCESS_TOKEN", "FACEBOOK_PAGE_ACCESS_TOKEN",
+                "INSTAGRAM_ACCESS_TOKEN", "AUTOMATION_API_KEY", "META_VERIFY_TOKEN")]
+            for secret in sorted((s for s in secrets if s), key=len, reverse=True):
+                value = value.replace(secret, "[REDACTED]")
+            value = re.sub(r"EAA[A-Za-z0-9_-]+", "[REDACTED]", value)
+            return value[:1000]
         raise HTTPException(
             502,
             {
-                "message": "Meta Graph API rejected the request",
-                "code": error.get("code"),
-                "error_subcode": error.get("error_subcode"),
+                "message": sanitized(error.get("message")) or "Meta Graph API rejected the request",
+                "type": sanitized(error.get("type")),
+                "code": error.get("code") if isinstance(error.get("code"), int) else None,
+                "error_subcode": error.get("error_subcode") if isinstance(error.get("error_subcode"), int) else None,
+                "fbtrace_id": sanitized(error.get("fbtrace_id")),
             },
         )
     return body
@@ -251,7 +310,7 @@ async def publish_facebook(payload: PublishPayload) -> Dict[str, Any]:
     return await graph_request(f"{page_id}/feed", token, {"message": payload.caption})
 
 
-async def publish_instagram(payload: PublishPayload) -> Dict[str, Any]:
+async def publish_instagram(payload: PublishPayload, *, editorial_post_id: Optional[int] = None) -> Dict[str, Any]:
     account_id = require_id("INSTAGRAM_BUSINESS_ACCOUNT_ID")
     token = instagram_token()
     host = instagram_host()
@@ -268,23 +327,20 @@ async def publish_instagram(payload: PublishPayload) -> Dict[str, Any]:
         raise HTTPException(
             502, "Instagram did not return a valid media container ID"
         )
-    if payload.video_url:
-        for attempt in range(10):
-            status = await graph_request(
-                creation_id,
-                token,
-                {"fields": "status_code,status"},
-                method="GET",
-                host=host,
-            )
-            code = str(status.get("status_code") or "").upper()
-            if code == "FINISHED":
-                break
-            if code in {"ERROR", "EXPIRED"}:
-                raise HTTPException(502, "Instagram media processing failed")
-            if attempt == 9:
-                raise HTTPException(504, "Instagram media container is not ready")
-            await asyncio.sleep(2)
+    if editorial_post_id is not None:
+        editorial.container(editorial_post_id, creation_id)
+    for attempt in range(10):
+        status = await graph_request(
+            creation_id, token, {"fields": "status_code,status"}, method="GET", host=host,
+        )
+        code = str(status.get("status_code") or "").upper()
+        if code == "FINISHED":
+            break
+        if code in {"ERROR", "EXPIRED", "PUBLISHED"}:
+            raise HTTPException(502, "Instagram container requires review")
+        if attempt == 9:
+            raise HTTPException(504, "Instagram media container is not ready")
+        await asyncio.sleep(2)
     media = await graph_request(
         f"{account_id}/media_publish",
         token,
@@ -294,12 +350,12 @@ async def publish_instagram(payload: PublishPayload) -> Dict[str, Any]:
     return {"container_id": creation_id, "media": media}
 
 
-async def publish(payload: PublishPayload) -> Dict[str, Any]:
+async def publish(payload: PublishPayload, *, editorial_post_id: Optional[int] = None) -> Dict[str, Any]:
     immediate = payload.model_copy(update={"publish_at": None})
     return await (
         publish_facebook(immediate)
         if payload.platform == "facebook"
-        else publish_instagram(immediate)
+        else publish_instagram(immediate, editorial_post_id=editorial_post_id)
     )
 
 
@@ -417,10 +473,13 @@ class StateStore:
 
 
 state = StateStore()
+editorial = EditorialStore()
 
 
 def classify(text: str) -> Category:
     text = text.lower()
+    if any(x in text for x in ["password", "contraseña", "leaked", "hack", "privacy", "privacidad", "menor", "child", "legal", "fraud", "pago", "payment", "amenaza"]):
+        return "urgent"
     if any(
         x in text for x in ["urgent", "urgente", "inmediato", "ayuda", "problema"]
     ):
@@ -495,6 +554,8 @@ def facebook_events(body: Dict[str, Any]) -> List[CommentPayload]:
         if not isinstance(entry, dict):
             continue
         page_id = str(entry.get("id", ""))
+        if page_id != os.getenv("FACEBOOK_PAGE_ID", ""):
+            continue
         for change in entry.get("changes", []):
             value = (
                 change.get("value")
@@ -540,6 +601,8 @@ def instagram_events(body: Dict[str, Any]) -> List[CommentPayload]:
     result: List[CommentPayload] = []
     for entry in body.get("entry", []):
         if not isinstance(entry, dict):
+            continue
+        if str(entry.get("id", "")) != os.getenv("INSTAGRAM_BUSINESS_ACCOUNT_ID", ""):
             continue
         changes = (
             [entry] if entry.get("field") in {"comments", "live_comments"} else []
@@ -590,23 +653,63 @@ async def process_event(event: CommentPayload) -> None:
 
 
 async def run_due_posts() -> Dict[str, Any]:
-    rows = state.due()
-    published = failed = 0
-    for row in rows:
+    published = failed = checked = 0
+    if not env_bool("SCHEDULER_ENABLED", False):
+        return {"ok": True, "checked": 0, "published": 0, "failed": 0, "paused": True}
+    for _ in range(20):
+        row = editorial.claim_due()
+        if row is None:
+            break
+        checked += 1
         try:
-            await publish(PublishPayload(**json.loads(row["payload_json"])))
-            state.success(int(row["id"]))
+            configured_id = require_id("FACEBOOK_PAGE_ID" if row["platform"] == "facebook" else "INSTAGRAM_BUSINESS_ACCOUNT_ID")
+            if row["target_id"] != configured_id:
+                editorial.failure(row["id"], "Destination changed after approval", "failed")
+                failed += 1
+                continue
+            result = await publish(PublishPayload(**row), editorial_post_id=row["id"])
+            media = result.get("media", {}) if row["platform"] == "instagram" else result
+            external_id = str(media.get("post_id") or media.get("id") or "")
+            if not re.fullmatch(META_ID_PATTERN, external_id):
+                raise ValueError("Missing provider ID")
+            editorial.success(row["id"], external_id)
             published += 1
+            try:
+                editorial.link(row["id"], await publication_link(row["platform"], external_id))
+            except Exception:
+                # The provider ID is already durable. A failed read must never repeat the write.
+                logger.warning("Publication confirmed; permalink lookup pending")
         except Exception as exc:
-            state.failure(int(row["id"]), type(exc).__name__)
+            error = type(exc).__name__
+            status = "needs_review"
+            if isinstance(exc, HTTPException) and isinstance(exc.detail, dict):
+                code = exc.detail.get("code")
+                if isinstance(code, int):
+                    error = f"Meta rejected request (code {code}); review permissions, token or rate limits"
+                    status = "failed"
+            editorial.failure(row["id"], error, status)
             failed += 1
     return {
         "ok": True,
-        "checked": len(rows),
+        "checked": checked,
         "published": published,
         "failed": failed,
         "received_at": now_iso(),
     }
+
+
+async def publication_link(platform: Platform, external_id: str) -> str:
+    field = "permalink_url" if platform == "facebook" else "permalink"
+    result = await graph_request(external_id, facebook_token() if platform == "facebook" else instagram_token(),
+                                 {"fields": field}, method="GET",
+                                 host="graph.facebook.com" if platform == "facebook" else instagram_host())
+    value = result.get(field)
+    from urllib.parse import urlsplit
+    parsed = urlsplit(value if isinstance(value, str) else "")
+    allowed = {"www.facebook.com", "facebook.com", "www.instagram.com", "instagram.com"}
+    if parsed.scheme != "https" or parsed.hostname not in allowed:
+        raise HTTPException(502, "Meta did not return a publication permalink")
+    return value
 
 
 @app.get("/")
@@ -623,6 +726,9 @@ async def root() -> Dict[str, Any]:
 
 @app.get("/health")
 async def health() -> Dict[str, Any]:
+    task = getattr(app.state, "scheduler_task", None)
+    if scheduler_daemon.enabled() and (task is None or task.done()):
+        raise HTTPException(503, "Scheduler worker is not running")
     return {
         "ok": True,
         "status": "healthy",
@@ -637,6 +743,7 @@ async def config() -> Dict[str, Any]:
         "ok": True,
         "version": APP_VERSION,
         "configured": {
+            "META_GRAPH_API_VERSION": meta_version(),
             "META_VERIFY_TOKEN": env_set("META_VERIFY_TOKEN"),
             "META_APP_SECRET": env_set("META_APP_SECRET"),
             "AUTOMATION_API_KEY": env_set("AUTOMATION_API_KEY"),
@@ -655,7 +762,7 @@ async def config() -> Dict[str, Any]:
             ),
             "INSTAGRAM_GRAPH_HOST": instagram_host(),
             "SCHEDULE_DB_PATH": state.path,
-            "SCHEDULER_ENABLED": env_bool("SCHEDULER_ENABLED", True),
+            "SCHEDULER_ENABLED": env_bool("SCHEDULER_ENABLED", False),
         },
     }
 
@@ -680,25 +787,7 @@ async def create_post(
     x_automation_key: Optional[str] = Header(default=None),
 ) -> Dict[str, Any]:
     require_automation_key(x_automation_key)
-    if (
-        payload.publish_at
-        and datetime.fromisoformat(payload.publish_at) > datetime.now(timezone.utc)
-    ):
-        schedule_id = state.schedule(payload)
-        return {
-            "ok": True,
-            "action": "scheduled",
-            "schedule_id": schedule_id,
-            "platform": payload.platform,
-            "publish_at": payload.publish_at,
-        }
-    return {
-        "ok": True,
-        "action": "published",
-        "platform": payload.platform,
-        "meta_result": await publish(payload),
-        "received_at": now_iso(),
-    }
+    raise HTTPException(409, "Create, approve and schedule a draft through /editorial/posts")
 
 
 @app.post("/facebook/posts")
@@ -728,12 +817,7 @@ async def facebook_reply(
     x_automation_key: Optional[str] = Header(default=None),
 ) -> Dict[str, Any]:
     require_automation_key(x_automation_key)
-    return {
-        "ok": True,
-        "platform": "facebook",
-        "action": "replied",
-        "meta_result": await reply_comment("facebook", comment_id, payload.message),
-    }
+    raise HTTPException(409, "Public replies require a reviewed draft; send manually in Meta")
 
 
 @app.post("/instagram/comments/{comment_id}/reply")
@@ -743,12 +827,7 @@ async def instagram_reply(
     x_automation_key: Optional[str] = Header(default=None),
 ) -> Dict[str, Any]:
     require_automation_key(x_automation_key)
-    return {
-        "ok": True,
-        "platform": "instagram",
-        "action": "replied",
-        "meta_result": await reply_comment("instagram", comment_id, payload.message),
-    }
+    raise HTTPException(409, "Public replies require a reviewed draft; send manually in Meta")
 
 
 @app.post("/scheduler/run")
@@ -756,7 +835,22 @@ async def scheduler_run(
     x_automation_key: Optional[str] = Header(default=None),
 ) -> Dict[str, Any]:
     require_automation_key(x_automation_key)
-    return await run_due_posts()
+    editorial.scheduler_started()
+    try:
+        result = await run_due_posts()
+    except Exception:
+        editorial.scheduler_finished({"ok": False, "error": "Scheduler cycle failed; inspect storage and configuration"})
+        raise HTTPException(503, "Scheduler cycle failed") from None
+    editorial.scheduler_finished(result)
+    return result
+
+
+@app.get("/scheduler/status")
+async def scheduler_status(x_automation_key: Optional[str] = Header(default=None)):
+    require_automation_key(x_automation_key)
+    task = getattr(app.state, "scheduler_task", None)
+    return {**editorial.scheduler_status(), "scheduler_enabled": scheduler_daemon.enabled(),
+            "worker_running": task is not None and not task.done()}
 
 
 @app.post("/webhook")
@@ -775,28 +869,114 @@ async def webhook(
     if not isinstance(body, dict):
         raise HTTPException(400, "JSON body must be an object")
     verify_meta_signature(raw, x_hub_signature_256)
+    entries = body.get("entry", [])
+    if not isinstance(entries, list):
+        raise HTTPException(422, "Webhook entry must be an array")
+    for entry in entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get("changes", []), list):
+            raise HTTPException(422, "Invalid webhook entry or changes")
+        if any(not isinstance(change, dict) for change in entry.get("changes", [])):
+            raise HTTPException(422, "Invalid webhook change")
     fb = facebook_events(body)
     ig = instagram_events(body)
-    queued = duplicates = 0
+    queued = duplicates = saved = 0
     for event in [*fb, *ig]:
-        enabled = (
-            env_bool("FACEBOOK_AUTO_REPLY_ENABLED")
-            if event.platform == "facebook"
-            else env_bool("INSTAGRAM_AUTO_REPLY_ENABLED")
-        )
-        if not enabled:
-            continue
-        if not state.claim_event(f"{event.platform}:comment:{event.comment_id}"):
+        category = classify(event.comment_text)
+        if not editorial.comment(event, category, reply_text(category, event)):
             duplicates += 1
             continue
-        background_tasks.add_task(process_event, event)
-        queued += 1
+        saved += 1
     return {
         "ok": True,
         "category": "meta_event",
         "facebook_comment_events": len(fb),
         "instagram_comment_events": len(ig),
         "auto_reply_queued": queued,
+        "review_drafts_saved": saved,
         "duplicates_ignored": duplicates,
         "received_at": now_iso(),
     }
+
+
+class DraftPayload(PublishPayload):
+    idempotency_key: str = Field(..., min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")
+    timezone: str = Field(default="America/New_York", min_length=1, max_length=80)
+
+
+class ScheduleRequest(BaseModel):
+    publish_at: str = Field(..., max_length=80)
+
+
+class ControlRequest(BaseModel):
+    paused: bool
+
+
+@app.post("/editorial/posts")
+async def create_draft(payload: DraftPayload, x_automation_key: Optional[str] = Header(default=None)):
+    require_automation_key(x_automation_key)
+    if payload.publish_at:
+        raise HTTPException(422, "Schedule only after reviewing and approving the draft")
+    target = require_id("FACEBOOK_PAGE_ID" if payload.platform == "facebook" else "INSTAGRAM_BUSINESS_ACCOUNT_ID")
+    return editorial.create(payload.model_dump(exclude={"idempotency_key", "timezone", "publish_at"}), payload.idempotency_key, target, payload.timezone)
+
+
+@app.get("/editorial/posts")
+async def list_drafts(x_automation_key: Optional[str] = Header(default=None)):
+    require_automation_key(x_automation_key)
+    return editorial.posts()
+
+
+@app.post("/editorial/posts/{post_id}/approve")
+async def approve_draft(post_id: int, x_automation_key: Optional[str] = Header(default=None)):
+    require_automation_key(x_automation_key)
+    return editorial.approve(post_id)
+
+
+@app.post("/editorial/posts/{post_id}/schedule")
+async def schedule_draft(post_id: int, payload: ScheduleRequest, x_automation_key: Optional[str] = Header(default=None)):
+    require_automation_key(x_automation_key)
+    return editorial.schedule(post_id, payload.publish_at)
+
+
+@app.post("/editorial/posts/{post_id}/cancel")
+async def cancel_draft(post_id: int, x_automation_key: Optional[str] = Header(default=None)):
+    require_automation_key(x_automation_key)
+    return editorial.cancel(post_id)
+
+
+@app.get("/editorial/control")
+async def read_control(x_automation_key: Optional[str] = Header(default=None)):
+    require_automation_key(x_automation_key)
+    return {**editorial.control(), "scheduler_enabled": env_bool("SCHEDULER_ENABLED", False)}
+
+
+@app.post("/editorial/control")
+async def set_control(payload: ControlRequest, x_automation_key: Optional[str] = Header(default=None)):
+    require_automation_key(x_automation_key)
+    return editorial.control(payload.paused)
+
+
+@app.get("/editorial/comments")
+async def list_comments(x_automation_key: Optional[str] = Header(default=None)):
+    require_automation_key(x_automation_key)
+    return editorial.comments()
+
+
+@app.post("/editorial/posts/{post_id}/refresh-link")
+async def refresh_link(post_id: int, x_automation_key: Optional[str] = Header(default=None)):
+    require_automation_key(x_automation_key)
+    item = editorial.get(post_id)
+    if item["status"] != "published" or not item["external_id"]:
+        raise HTTPException(409, "A confirmed publication ID is required")
+    editorial.link(post_id, await publication_link(item["platform"], item["external_id"]))
+    return editorial.get(post_id)
+
+
+@app.get("/studio", include_in_schema=False)
+async def studio():
+    return FileResponse(FilePath(__file__).with_name("studio.html"), media_type="text/html", headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer", "Content-Security-Policy": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' https:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"})
+
+
+@app.get("/media/demo-privacy-en.jpg", include_in_schema=False)
+async def demo_media():
+    return FileResponse(FilePath(__file__).parent / "content" / "demo-privacy-en.jpg", media_type="image/jpeg")

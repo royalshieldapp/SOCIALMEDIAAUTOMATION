@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "socialmediaautomation"
-version = "3.0.1"
+version = "3.1.0"
 description = "Standalone FastAPI backend for Royal Shield Facebook and Instagram automation"
 readme = "README.md"
 requires-python = ">=3.11"

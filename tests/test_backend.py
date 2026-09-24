@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import hmac
 import json
@@ -54,7 +55,7 @@ def test_root_has_no_make(client):
     response = client.get("/")
     assert response.status_code == 200
     assert "make" not in json.dumps(response.json()).lower()
-    assert response.json()["version"] == "3.0.1"
+    assert response.json()["version"] == "3.1.0"
 
 
 def test_mutating_endpoint_fails_closed_without_key(client):
@@ -85,13 +86,8 @@ def test_facebook_publish_calls_graph_api(client):
     with patch.object(
         mod, "graph_request", new=AsyncMock(return_value={"id": "post_1"})
     ) as request:
-        response = client.post(
-            "/facebook/posts",
-            headers={"x-automation-key": "key"},
-            json={"platform": "facebook", "caption": "hello"},
-        )
-    assert response.status_code == 200
-    assert response.json()["action"] == "published"
+        result = asyncio.run(mod.publish_facebook(mod.PublishPayload(platform="facebook", caption="hello")))
+    assert result["id"] == "post_1"
     request.assert_awaited_once_with(
         "page_1/feed", "token", {"message": "hello"}
     )
@@ -105,22 +101,15 @@ def test_instagram_image_publish_uses_container_then_publish(client):
             "INSTAGRAM_ACCESS_TOKEN": "ig-token",
         }
     )
-    graph = AsyncMock(side_effect=[{"id": "container_1"}, {"id": "media_1"}])
+    graph = AsyncMock(side_effect=[{"id": "container_1"}, {"status_code": "FINISHED"}, {"id": "media_1"}])
     with patch.object(mod, "graph_request", new=graph):
-        response = client.post(
-            "/instagram/posts",
-            headers={"x-automation-key": "key"},
-            json={
-                "platform": "instagram",
-                "caption": "hello ig",
-                "image_url": "https://example.com/a.jpg",
-            },
-        )
-    assert response.status_code == 200
-    assert response.json()["meta_result"]["container_id"] == "container_1"
-    assert graph.await_count == 2
+        result = asyncio.run(mod.publish_instagram(mod.PublishPayload(platform="instagram", caption="hello ig", image_url="https://example.com/a.jpg")))
+    assert result["container_id"] == "container_1"
+    assert graph.await_count == 3
     assert graph.await_args_list[0].args[0] == "ig_1/media"
-    assert graph.await_args_list[1].args[0] == "ig_1/media_publish"
+    assert graph.await_args_list[1].args[0] == "container_1"
+    assert graph.await_args_list[1].kwargs["method"] == "GET"
+    assert graph.await_args_list[2].args[0] == "ig_1/media_publish"
 
 
 def test_instagram_public_comment_reply(client):
@@ -134,12 +123,8 @@ def test_instagram_public_comment_reply(client):
     with patch.object(
         mod, "graph_request", new=AsyncMock(return_value={"id": "reply_1"})
     ) as request:
-        response = client.post(
-            "/instagram/comments/comment_1/reply",
-            headers={"x-automation-key": "key"},
-            json={"message": "Gracias"},
-        )
-    assert response.status_code == 200
+        result = asyncio.run(mod.reply_comment("instagram", "comment_1", "Gracias"))
+    assert result["id"] == "reply_1"
     request.assert_awaited_once_with(
         "comment_1/replies",
         "ig-token",
@@ -166,6 +151,7 @@ def test_instagram_webhook_is_deduplicated(client):
         {
             "META_APP_SECRET": "secret",
             "INSTAGRAM_AUTO_REPLY_ENABLED": "true",
+            "INSTAGRAM_BUSINESS_ACCOUNT_ID": "ig_1",
         }
     )
     body = {
@@ -194,12 +180,13 @@ def test_instagram_webhook_is_deduplicated(client):
         first = client.post("/webhook", content=raw, headers=headers)
         second = client.post("/webhook", content=raw, headers=headers)
     assert first.status_code == 200
-    assert first.json()["auto_reply_queued"] == 1
+    assert first.json()["auto_reply_queued"] == 0
+    assert first.json()["review_drafts_saved"] == 1
     assert second.json()["auto_reply_queued"] == 0
     assert second.json()["duplicates_ignored"] == 1
 
 
-def test_future_post_is_scheduled_without_calling_meta(client):
+def test_future_legacy_post_requires_editorial_approval(client):
     os.environ["AUTOMATION_API_KEY"] = "key"
     publish_at = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
     with patch.object(mod, "publish", new=AsyncMock()) as publish:
@@ -212,13 +199,11 @@ def test_future_post_is_scheduled_without_calling_meta(client):
                 "publish_at": publish_at,
             },
         )
-    assert response.status_code == 200
-    assert response.json()["action"] == "scheduled"
-    assert isinstance(response.json()["schedule_id"], int)
+    assert response.status_code == 409
     publish.assert_not_awaited()
 
 
-def test_scheduler_publishes_due_post(client):
+def test_disabled_scheduler_does_not_publish_legacy_post(client):
     os.environ["AUTOMATION_API_KEY"] = "key"
     payload = mod.PublishPayload(
         platform="facebook",
@@ -240,5 +225,5 @@ def test_scheduler_publishes_due_post(client):
             "/scheduler/run", headers={"x-automation-key": "key"}
         )
     assert response.status_code == 200
-    assert response.json()["published"] == 1
-    publish.assert_awaited_once()
+    assert response.json()["published"] == 0
+    publish.assert_not_awaited()

@@ -17,6 +17,8 @@ WORKDIR /app
 COPY --from=builder /root/.local /root/.local
 COPY SOCIALMEDIAAUTOMATION.py .
 COPY scheduler_daemon.py .
+COPY editorial.py studio.html ./
+COPY content/demo-privacy-en.jpg ./content/demo-privacy-en.jpg
 
 RUN mkdir -p /data
 
@@ -30,5 +32,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 
 EXPOSE 8000
 
-# The scheduler companion runs in the same container; Uvicorn stays PID 1.
-CMD ["sh", "-c", "python scheduler_daemon.py & exec uvicorn SOCIALMEDIAAUTOMATION:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# FastAPI lifespan owns the scheduler companion; Uvicorn stays PID 1.
+CMD ["sh", "-c", "exec uvicorn SOCIALMEDIAAUTOMATION:app --host 0.0.0.0 --port ${PORT:-8000}"]
