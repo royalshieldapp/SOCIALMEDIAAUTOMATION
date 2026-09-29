@@ -211,3 +211,93 @@ Responde ÚNICAMENTE en formato JSON estricto con esta estructura:
             "category": "comentario_publico",
             "provider": "fallback_error"
         }
+
+
+APP_PROMO_PILLARS = {
+    "descarga": "Lanzamiento y descarga directa de la app móvil Royal Shield para proteger tu vida digital y tu teléfono 24/7.",
+    "mapa_riesgo": "Mapa interactivo de riesgo y alertas comunitarias en tiempo real para evitar zonas de peligro.",
+    "vpn": "Navegación ultra rápida, segura y cifrada con la VPN integrada de Royal Shield al usar Wi-Fi público.",
+    "antivirus": "Escaneo inteligente de vulnerabilidades y detección proactiva de virus, malware y apps espía.",
+    "familia": "Protección integral para la familia: vinculación de dispositivos, geolocalización segura y alertas familiares.",
+    "antifraude": "Escudo contra estafas bancarias, clonación de tarjetas y mensajes SMS fraudulentos (phishing).",
+    "gratis": "Descarga gratuita y prueba sin compromiso del escudo de ciberseguridad Royal Shield."
+}
+
+
+async def generate_app_promo_post(
+    feature: str = "descarga",
+    platform: str = "instagram",
+    cta: Optional[str] = None
+) -> Dict[str, Any]:
+    """Genera una publicación de alto impacto orientada exclusivamente a promocionar y descargar la app móvil Royal Shield."""
+    feature_desc = APP_PROMO_PILLARS.get(feature, APP_PROMO_PILLARS["descarga"])
+    api_key = get_nvidia_key()
+    cta_clean = (cta or "").strip()
+    cta_phrase = cta_clean or ("Descarga la app en el enlace de nuestra biografía" if platform == "instagram" else "Descárgala gratis en Google Play y App Store")
+    
+    if not api_key:
+        return {
+            "caption": (
+                "📲 ¿Tu teléfono y tus datos están verdaderamente seguros? Conoce la app móvil Royal Shield.\n\n"
+                f"🛡️ {feature_desc}\n\n"
+                "Características destacadas:\n"
+                "• Protección activa en tiempo real contra amenazas digitales.\n"
+                "• Conexión privada y cifrada estés donde estés.\n"
+                "• Alertas inmediatas para cuidar tu información personal.\n\n"
+                f"👉 {cta_phrase} y activa tu escudo de protección hoy mismo.\n\n"
+                "#RoyalShield #AppRoyalShield #Ciberseguridad #SeguridadMovil #DescargaLaApp #ProteccionDigital"
+            ),
+            "feature": feature,
+            "platform": platform,
+            "cta": cta_phrase,
+            "provider": "fallback_template"
+        }
+
+    cta_instruction = f"Llamada a la acción (CTA) obligatoria al final: '{cta_phrase}'."
+
+    prompt = f"""Redacta un post publicitario y de marketing persuasivo de alto impacto para {platform.upper()} enfocado EXCLUSIVAMENTE en promocionar e invitar a DESCARGAR LA APLICACIÓN MÓVIL ROYAL SHIELD.
+Característica o foco clave a destacar: "{feature_desc}"
+
+Objetivo comercial del post:
+- Convencer a la audiencia de que instalar la app móvil Royal Shield es indispensable para su seguridad y privacidad.
+- Mostrar el problema real que resuelve (riesgos, fraudes, robo de datos o conexiones inseguras) y cómo Royal Shield lo soluciona en un toque.
+- {cta_instruction}
+
+Formato:
+- Primera línea: Gancho magnético que detenga el scroll (con emoji relevante).
+- Párrafos breves con saltos de línea claros.
+- Lista con 3 beneficios directos y fáciles de entender.
+- Llamada a la acción clara y contundente.
+- 5 a 8 hashtags estratégicos (#RoyalShield #AppRoyalShield #Ciberseguridad...).
+
+IMPORTANTE: Devuelve ÚNICAMENTE el texto final de la publicación (copy listo para publicar), sin preámbulos, encabezados ni explicaciones.
+"""
+    messages = [
+        {"role": "system", "content": BRAND_SYSTEM_PROMPT},
+        {"role": "user", "content": prompt}
+    ]
+    try:
+        content = await call_nvidia_chat(messages, temperature=0.75, max_tokens=1000)
+        cleaned = re.sub(r"^(aquí tienes|a continuación|claro|por supuesto)[^\n]*\n+", "", content, flags=re.IGNORECASE).strip()
+        return {
+            "caption": cleaned or content,
+            "feature": feature,
+            "platform": platform,
+            "cta": cta_phrase,
+            "provider": f"nvidia:{get_nvidia_model()}"
+        }
+    except Exception as exc:
+        logger.warning("Fallo al generar post promocional con NVIDIA: %s", exc)
+        return {
+            "caption": (
+                "📲 Protege tu teléfono y tu tranquilidad con la app móvil de Royal Shield.\n\n"
+                f"🛡️ {feature_desc}\n\n"
+                f"👉 {cta_phrase}.\n\n"
+                "#RoyalShield #AppRoyalShield #Ciberseguridad #SeguridadMovil"
+            ),
+            "feature": feature,
+            "platform": platform,
+            "cta": cta_phrase,
+            "provider": "fallback_error"
+        }
+

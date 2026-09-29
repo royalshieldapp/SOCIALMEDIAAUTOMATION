@@ -22,11 +22,12 @@ from typing import Any, Dict, List, Literal, Optional
 
 import httpx
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Path, Query, Request
-from fastapi.responses import PlainTextResponse, FileResponse
+from fastapi.responses import PlainTextResponse, FileResponse, Response
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 from editorial import EditorialStore
 import scheduler_daemon
 import ai_content
+import drive_integration
 
 APP_VERSION = "3.1.0"
 DEFAULT_META_GRAPH_API_VERSION = "v25.0"
@@ -144,6 +145,16 @@ class AIReplyRequest(BaseModel):
     comment_text: str
     user_name: str = "Usuario"
     platform: Platform = "instagram"
+
+
+class AIAppPromoRequest(BaseModel):
+    feature: str = "descarga"
+    platform: Platform = "instagram"
+    cta: Optional[str] = None
+
+
+class DriveSyncRequest(BaseModel):
+    folder_url: Optional[str] = None
 
 
 def now_iso() -> str:
@@ -1025,11 +1036,66 @@ async def ai_reply_comment(
     )
 
 
+@app.post("/ai/generate-app-promo")
+async def ai_generate_app_promo(
+    payload: AIAppPromoRequest,
+    x_automation_key: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    require_automation_key(x_automation_key)
+    return await ai_content.generate_app_promo_post(
+        feature=payload.feature,
+        platform=payload.platform,
+        cta=payload.cta,
+    )
+
+
+@app.post("/drive/sync")
+async def drive_sync(
+    payload: DriveSyncRequest,
+    request: Request,
+    x_automation_key: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    require_automation_key(x_automation_key)
+    base_host = str(request.base_url).rstrip("/")
+    return await drive_integration.fetch_folder_images(payload.folder_url, base_host)
+
+
+@app.get("/drive/proxy/{file_id}", include_in_schema=False)
+async def drive_proxy(file_id: str = Path(..., pattern=r"^[a-zA-Z0-9_-]{20,}$")):
+    resp = await drive_integration.stream_drive_file(file_id)
+    if resp.status_code != 200:
+        raise HTTPException(502, "Could not fetch image from Google Drive")
+    content_type = resp.headers.get("content-type", "image/jpeg")
+    return Response(content=resp.content, media_type=content_type, headers={"Cache-Control": "public, max-age=86400"})
+
+
 @app.get("/studio", include_in_schema=False)
 async def studio():
     return FileResponse(FilePath(__file__).with_name("studio.html"), media_type="text/html", headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer", "Content-Security-Policy": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' https:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"})
 
 
-@app.get("/media/demo-privacy-en.jpg", include_in_schema=False)
-async def demo_media():
-    return FileResponse(FilePath(__file__).parent / "content" / "demo-privacy-en.jpg", media_type="image/jpeg")
+MEDIA_DIR = FilePath(__file__).parent / "content"
+
+
+@app.get("/media-assets", include_in_schema=False)
+async def list_media_assets():
+    assets = []
+    if MEDIA_DIR.is_dir():
+        for f in sorted(MEDIA_DIR.glob("*.*")):
+            if f.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}:
+                assets.append({
+                    "filename": f.name,
+                    "title": f.stem.replace("-", " ").replace("_", " ").title(),
+                    "url": f"/media/{f.name}"
+                })
+    return assets
+
+
+@app.get("/media/{filename}", include_in_schema=False)
+async def get_media_asset(filename: str = Path(..., pattern=r"^[A-Za-z0-9_-]+\.(jpg|jpeg|png|webp)$")):
+    target = (MEDIA_DIR / filename).resolve()
+    if not target.is_relative_to(MEDIA_DIR.resolve()) or not target.is_file():
+        raise HTTPException(404, "Media asset not found")
+    media_type = "image/png" if filename.endswith(".png") else "image/webp" if filename.endswith(".webp") else "image/jpeg"
+    return FileResponse(target, media_type=media_type, headers={"Cache-Control": "public, max-age=86400"})
+

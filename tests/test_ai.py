@@ -62,3 +62,32 @@ def test_ai_fallback_without_nvidia_key(monkeypatch):
     result = asyncio.run(ai_content.generate_post(topic="Alerta de phishing", platform="facebook"))
     assert "Royal Shield" in result["caption"]
     assert result["provider"] == "fallback_template"
+
+
+def test_ai_generate_app_promo_with_mocked_nvidia(client, monkeypatch):
+    monkeypatch.setenv("AUTOMATION_API_KEY", "secret_key")
+    monkeypatch.setenv("NVIDIA_API_KEY", "test_key")
+    with patch.object(
+        ai_content,
+        "call_nvidia_chat",
+        new=AsyncMock(return_value="📲 ¡Descarga la app Royal Shield ahora y activa tu escudo!")
+    ):
+        response = client.post(
+            "/ai/generate-app-promo",
+            headers={"x-automation-key": "secret_key"},
+            json={"feature": "vpn", "platform": "instagram", "cta": "Enlace en bio"}
+        )
+    assert response.status_code == 200
+    data = response.json()
+    assert "Descarga la app Royal Shield" in data["caption"]
+    assert data["feature"] == "vpn"
+    assert data["cta"] == "Enlace en bio"
+
+
+def test_ai_app_promo_fallback_without_nvidia_key(monkeypatch):
+    monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
+    result = asyncio.run(ai_content.generate_app_promo_post(feature="mapa_riesgo", platform="instagram"))
+    assert "Royal Shield" in result["caption"]
+    assert "Mapa interactivo" in result["caption"]
+    assert result["provider"] == "fallback_template"
+

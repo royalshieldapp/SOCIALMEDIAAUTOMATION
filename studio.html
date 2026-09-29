@@ -2,30 +2,69 @@
 <html lang="es"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Royal Shield · Studio & AI Automation</title>
 <style>
-:root{color-scheme:dark;font:16px/1.55 system-ui;background:#0c0d10;color:#ecebe6}*{box-sizing:border-box}body{max-width:1120px;margin:auto;padding:36px 24px}h1{font-size:42px;letter-spacing:-1.5px;margin:6px 0}h2{font-size:22px}small,.muted{color:#aaa9a3}.brand{letter-spacing:4px;color:#d8b669;font-size:13px}section,article{background:#15171c;border:1px solid #33343a;border-radius:16px;padding:24px;margin:20px 0}.grid{display:grid;grid-template-columns:1fr 1fr;gap:22px}label{display:block;margin:12px 0 5px}input,textarea,select{width:100%;padding:12px;border-radius:8px;border:1px solid #494a50;background:#0d0f12;color:inherit;font:inherit}textarea{min-height:130px;resize:vertical}button{padding:11px 16px;margin:12px 8px 0 0;background:#d8b669;border:0;border-radius:8px;color:#131313;font:600 14px system-ui;cursor:pointer;transition:transform 0.1s ease,opacity 0.2s}button:hover{opacity:0.92}button:active{transform:scale(0.98)}button.secondary{background:#25282e;color:#ecebe6;border:1px solid #505157}button:disabled{opacity:.45;cursor:wait}.status{display:inline-block;padding:4px 12px;background:#292820;color:#e5ca88;border-radius:20px}#message{white-space:pre-wrap;min-height:24px;color:#f0d29a;font-weight:500}.caption{white-space:pre-wrap}.preview{width:100%;max-height:310px;object-fit:contain;border-radius:12px}a{color:#e5ca88}.row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.actions{margin-top:12px}details{margin:14px 0}summary{cursor:pointer}#workspace[hidden]{display:none}.chip{background:#1e222b;border:1px solid #3e4452;color:#dcdbd5;font-size:13px;padding:6px 12px;border-radius:20px;cursor:pointer;transition:all 0.15s}.chip:hover{border-color:#d8b669;color:#f4d88e}@media(max-width:760px){.grid{grid-template-columns:1fr}body{padding:20px}h1{font-size:34px}}
+:root{color-scheme:dark;font:16px/1.55 system-ui;background:#0c0d10;color:#ecebe6}*{box-sizing:border-box}body{max-width:1160px;margin:auto;padding:32px 20px}h1{font-size:38px;letter-spacing:-1.2px;margin:6px 0}h2{font-size:20px;margin:0 0 8px}h3{font-size:16px;margin:12px 0 6px}small,.muted{color:#a5a49e}.brand{letter-spacing:4px;color:#d8b669;font-size:13px;font-weight:700}section,article{background:#15171c;border:1px solid #2f3138;border-radius:16px;padding:24px;margin:18px 0}.grid{display:grid;grid-template-columns:1.1fr 0.9fr;gap:20px}label{display:block;margin:12px 0 5px;font-weight:600;font-size:14px}input,textarea,select{width:100%;padding:12px;border-radius:8px;border:1px solid #44464e;background:#0d0f12;color:inherit;font:inherit}textarea{min-height:120px;resize:vertical}button{padding:10px 16px;margin:10px 6px 0 0;background:#d8b669;border:0;border-radius:8px;color:#111;font:600 14px system-ui;cursor:pointer;transition:all 0.15s ease}button:hover{opacity:0.92;transform:translateY(-1px)}button:active{transform:scale(0.98)}button.secondary{background:#23262d;color:#ecebe6;border:1px solid #444750}button:disabled{opacity:.45;cursor:wait}.status{display:inline-block;padding:4px 12px;background:#292820;color:#e5ca88;border-radius:20px;font-size:13px}#message{white-space:pre-wrap;min-height:24px;color:#f0d29a;font-weight:500;margin:10px 0}.caption{white-space:pre-wrap}.preview{width:100%;max-height:280px;object-fit:contain;border-radius:10px;margin-top:8px}a{color:#e5ca88}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.chip{background:#1e222b;border:1px solid #3c4250;color:#deddd7;font-size:13px;padding:6px 14px;border-radius:20px;cursor:pointer;transition:all 0.15s}.chip:hover,.chip.active{border-color:#d8b669;color:#f4d88e;background:#272418}.gallery-grid{display:grid;grid-template-columns:repeat(auto-fill, minmax(130px, 1fr));gap:12px;margin:12px 0;max-height:300px;overflow-y:auto;padding-right:4px}.gallery-item{border:2px solid #2f333d;border-radius:10px;overflow:hidden;cursor:pointer;transition:all 0.15s;background:#0c0d10;text-align:center}.gallery-item:hover{border-color:#d8b669;transform:scale(1.02)}.gallery-item.selected{border-color:#d8b669;box-shadow:0 0 10px rgba(216,182,105,0.4)}.gallery-item img{width:100%;height:100px;object-fit:cover;display:block}.gallery-item span{display:block;font-size:11px;padding:4px;color:#bbb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}#workspace[hidden]{display:none}@media(max-width:760px){.grid{grid-template-columns:1fr}body{padding:16px}h1{font-size:30px}}
 </style>
-<header><div class="brand">ROYAL SHIELD</div><h1>Tu contenido, bajo tu control.</h1><p class="muted">Automatización inteligente y programación para Facebook e Instagram.</p></header>
-<section id="login"><h2>Acceso al Studio</h2><label for="key">Clave de administración</label><input id="key" type="password" autocomplete="off"><small>Introduce la clave aquí, nunca en el chat. Se conserva solo durante esta sesión.</small><br><button id="connect">Conectar</button></section>
+<header><div class="brand">ROYAL SHIELD</div><h1>Tu contenido, bajo tu control.</h1><p class="muted">Automatización inteligente, banco de imágenes y programación para Facebook e Instagram.</p></header>
+<section id="login"><h2>Acceso al Studio</h2><label for="key">Clave de administración</label><input id="key" type="password" autocomplete="off"><small>Introduce la clave configurada en AUTOMATION_API_KEY en Railway.</small><br><button id="connect">Conectar</button></section>
 <p id="message" role="status" aria-live="polite"></p>
+
 <main id="workspace" hidden>
 <div class="row"><span id="control" class="status"></span><button id="pause" class="secondary">Pausar</button><button id="resume">Reanudar</button><button id="reload" class="secondary">Actualizar</button><button id="disconnect" class="secondary">Cerrar sesión</button></div>
 
-<!-- GENERADOR CON INTELIGENCIA ARTIFICIAL -->
-<section style="background:linear-gradient(145deg, #171c26, #121419); border:1px solid #d8b66955; box-shadow:0 8px 24px rgba(0,0,0,0.35);">
+<!-- SECCIÓN 1: PROMOCIÓN EXCLUSIVA DE LA APP ROYAL SHIELD -->
+<section style="background:linear-gradient(145deg, #181d26, #12141a); border:1px solid #d8b66977; box-shadow:0 8px 24px rgba(0,0,0,0.45); border-radius:16px;">
 <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
-  <h2>✨ Generador de Publicaciones con IA (NVIDIA NIM)</h2>
-  <span class="status" style="background:#2c2514; color:#f0d07d; border:1px solid #d8b66944;">Motor IA Activo</span>
+  <h2>📱 Promoción Exclusiva de la Aplicación Royal Shield</h2>
+  <span class="status" style="background:#2c2414; color:#f5d78a; border:1px solid #d8b66955; font-weight:600;">Campaña 100% Conversión & Descargas</span>
 </div>
-<p class="muted">Selecciona un tema o escribe uno propio para generar copys atractivos con gancho, emojis y hashtags listos para publicar.</p>
-<div style="display:flex; gap:8px; flex-wrap:wrap; margin:12px 0;">
+<p class="muted" style="margin:4px 0 12px;">Sección especializada para crear publicaciones persuasivas que inviten a los usuarios a instalar la app móvil en su celular y conocer sus herramientas clave.</p>
+
+<label style="margin:6px 0 4px; color:#d8b669; font-size:13px; text-transform:uppercase; letter-spacing:1px;">1. Selecciona la Función o Enfoque de la App:</label>
+<div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px;">
+  <span class="chip active" onclick="setAppFeature(this, 'descarga')">🚀 Descarga General & Bienvenida</span>
+  <span class="chip" onclick="setAppFeature(this, 'mapa_riesgo')">📍 Mapa de Riesgo en Vivo</span>
+  <span class="chip" onclick="setAppFeature(this, 'vpn')">🔒 VPN Cifrada & Wi-Fi Seguro</span>
+  <span class="chip" onclick="setAppFeature(this, 'antivirus')">⚡ Escaneo de Amenazas & Virus</span>
+  <span class="chip" onclick="setAppFeature(this, 'familia')">👨‍👩‍👧 Protección Digital Familiar</span>
+  <span class="chip" onclick="setAppFeature(this, 'antifraude')">💳 Escudo Antifraude & Phishing</span>
+  <span class="chip" onclick="setAppFeature(this, 'gratis')">🆓 Descarga Gratuita / Prueba sin Costo</span>
+</div>
+
+<label for="appPromoCta" style="margin:6px 0 4px; color:#d8b669; font-size:13px; text-transform:uppercase; letter-spacing:1px;">2. Llamada a la Acción (CTA) / Enlace de Descarga:</label>
+<div class="row" style="margin-bottom:14px;">
+  <input id="appPromoCta" type="text" placeholder="Ej: Descarga la app en el enlace de nuestra biografía" value="Descarga la app en el enlace de nuestra biografía" style="flex:1; min-width:280px;">
+  <select id="appPromoPlatform" style="width:auto; min-width:140px;">
+    <option value="instagram">Instagram</option>
+    <option value="facebook">Facebook</option>
+  </select>
+  <button id="btnAppPromoGenerate" type="button" style="margin:0; background:#d8b669; color:#111; font-weight:700;">🚀 Generar Post de la App</button>
+</div>
+
+<div id="appPromoPreviewBox" style="display:none; background:#0e1014; border:1px solid #323640; border-radius:10px; padding:16px; margin-top:10px;">
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+    <span style="color:#d8b669; font-size:13px; font-weight:600;">✨ Copia de la App generada y cargada en el borrador abajo:</span>
+    <button type="button" class="secondary" onclick="document.getElementById('draftForm').scrollIntoView({behavior:'smooth'})" style="padding:4px 10px; font-size:12px; margin:0;">Ir al Borrador ↓</button>
+  </div>
+  <p id="appPromoPreviewText" class="caption" style="font-size:13px; max-height:140px; overflow-y:auto; color:#ccc; margin:0;"></p>
+</div>
+</section>
+
+<!-- SECCIÓN 2: GENERADOR IA EDUCATIVO / TIPS -->
+<section style="background:#15181f; border:1px solid #373b47;">
+<div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+  <h2>✨ Generador de Publicaciones de Ciberseguridad (Tips & Alertas)</h2>
+  <span class="status" style="background:#222630; color:#a3b8cc;">NVIDIA NIM AI</span>
+</div>
+<p class="muted">Publicaciones de valor, advertencias de estafas y consejos prácticos de seguridad.</p>
+<div style="display:flex; gap:8px; flex-wrap:wrap; margin:10px 0;">
   <span class="chip" onclick="pickTopic('Estafas por SMS y Phishing bancario')">📱 Phishing SMS</span>
   <span class="chip" onclick="pickTopic('Peligros de Wi-Fi público y protección VPN')">🛡️ Wi-Fi & VPN</span>
   <span class="chip" onclick="pickTopic('Seguridad digital familiar y protección de niños')">👨‍👩‍👧 Familia Segura</span>
   <span class="chip" onclick="pickTopic('Alertas de riesgo comunitario y monitoreo en tiempo real')">🚨 Alertas en Vivo</span>
-  <span class="chip" onclick="pickTopic('Privacidad digital y cómo evitar filtraciones de contraseñas')">🔒 Privacidad & Passwords</span>
+  <span class="chip" onclick="pickTopic('Privacidad digital y cómo evitar filtraciones de contraseñas')">🔒 Passwords & Privacidad</span>
 </div>
 <div class="row">
-  <input id="aiTopic" type="text" placeholder="Escribe un tema o selecciona uno arriba..." style="flex:1; min-width:260px;">
+  <input id="aiTopic" type="text" placeholder="Escribe un tema o selecciona uno arriba..." style="flex:1; min-width:240px;">
   <select id="aiPlatform" style="width:auto; min-width:140px;">
     <option value="instagram">Instagram</option>
     <option value="facebook">Facebook</option>
@@ -34,15 +73,79 @@
 </div>
 </section>
 
-<div class="grid"><section><h2>Nuevo borrador</h2><form id="draftForm"><label for="platform">Plataforma</label><select id="platform"><option value="facebook">Facebook</option><option value="instagram">Instagram</option></select><label for="caption">Texto de la publicación</label><textarea id="caption" maxlength="2200" required placeholder="Texto del post, redactado a mano o generado con el botón de IA..."></textarea><label for="image">URL pública de la imagen (HTTPS)</label><input id="image" type="url" placeholder="https://…"><small class="muted">Ejemplo interno de demo: <a href="javascript:void(0)" onclick="$('image').value=window.location.origin+'/media/demo-privacy-en.jpg'">Usar imagen demo de Royal Shield</a></small><label for="tz">Zona horaria</label><input id="tz" value="America/New_York" required><button type="submit">Guardar borrador</button></form></section>
-<section><h2>Flujo Editorial Seguro</h2><p>1. <strong>Genera o redacta</strong> una publicación para Facebook o Instagram.</p><p>2. <strong>Revisa</strong> el texto, hashtags y destino antes de aprobar.</p><p>3. <strong>Programa</strong> la fecha y hora de publicación.</p><p>4. <strong>El Scheduler automático</strong> publicará directamente en Meta cuando llegue la hora.</p><small class="muted">La pausa detiene nuevas publicaciones. Si un resultado es incierto en Meta, el sistema nunca repetirá la publicación para evitar duplicados.</small></section></div>
-<h2>Publicaciones</h2><div id="posts"></div><h2>Comentarios para revisión</h2><p class="muted">Las respuestas inteligentes generadas por la IA están listas para enviar o revisar.</p><div id="comments"></div>
+<!-- SECCIÓN 3: BANCO DE IMÁGENES (DRIVE + MARCA LOCAL) -->
+<section style="background:#13161c; border:1px solid #363b46;">
+<div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+  <h2>📁 Banco de Imágenes de Marca & Google Drive</h2>
+  <span class="status" style="background:#1b241d; color:#8cd89c;">Listo para Publicar</span>
+</div>
+<p class="muted">Conecta tu carpeta de Google Drive o selecciona una de las imágenes oficiales de Royal Shield para tu publicación.</p>
+
+<div class="row" style="margin-bottom:12px;">
+  <input id="driveFolderUrl" type="text" placeholder="Pega el enlace o ID de tu carpeta de Google Drive..." style="flex:1; min-width:260px;">
+  <button id="btnSyncDrive" type="button" class="secondary" style="margin:0;">🔄 Cargar desde Google Drive</button>
+</div>
+
+<h3>Selecciona una imagen con 1 clic:</h3>
+<div id="mediaGallery" class="gallery-grid"></div>
+<small class="muted">Las imágenes se sirven de forma segura y optimizada para que Meta las publique sin errores.</small>
+</section>
+
+<div class="grid">
+  <!-- FORMULARIO EDITORIAL -->
+  <section>
+    <h2>Nuevo borrador</h2>
+    <form id="draftForm">
+      <label for="platform">Plataforma</label>
+      <select id="platform">
+        <option value="instagram">Instagram</option>
+        <option value="facebook">Facebook</option>
+      </select>
+      <label for="caption">Texto de la publicación</label>
+      <textarea id="caption" maxlength="2200" required placeholder="Texto del post redactado o generado con la IA..."></textarea>
+      <label for="image">URL pública de la imagen (HTTPS)</label>
+      <input id="image" type="url" placeholder="https://… (Elige una del banco de imágenes arriba)">
+      <div id="imagePreviewContainer" style="display:none; margin-top:8px;">
+        <small class="muted">Vista previa de la imagen seleccionada:</small>
+        <img id="formImagePreview" class="preview" alt="Vista previa">
+      </div>
+      <label for="tz">Zona horaria</label>
+      <input id="tz" value="America/New_York" required>
+      <button type="submit">Guardar borrador</button>
+    </form>
+  </section>
+
+  <!-- RECORRIDO EDITORIAL -->
+  <section>
+    <h2>Flujo Editorial Seguro</h2>
+    <p>1. <strong>Genera o redacta</strong> una publicación (con IA o manual).</p>
+    <p>2. <strong>Elige una imagen</strong> de tu Drive o de la marca con 1 clic arriba.</p>
+    <p>3. <strong>Guarda el borrador</strong> y pulsa <strong>"Aprobar contenido"</strong>.</p>
+    <p>4. <strong>Programa</strong> la fecha/hora. El publicador automático lo enviará a Meta cuando llegue el momento.</p>
+    <small class="muted">La pausa detiene nuevas publicaciones sin afectar las ya enviadas.</small>
+  </section>
+</div>
+
+<h2>Publicaciones</h2>
+<div id="posts"></div>
+
+<h2>Comentarios para revisión</h2>
+<p class="muted">Respuestas sugeridas por la IA a comentarios reales de tus seguidores.</p>
+<div id="comments"></div>
 </main>
+
 <script>
 'use strict';
-let apiKey='',draftKey=crypto.randomUUID();
+let apiKey='',draftKey=crypto.randomUUID(),currentAppFeature='descarga';
 const $=id=>document.getElementById(id),labels={draft:'Borrador',approved:'Aprobado',scheduled:'Programado',publishing:'En curso',published:'Publicado',failed:'Fallido',needs_review:'Resultado incierto · revisar Meta',cancelled:'Cancelado',pending_review:'Pendiente de revisión'};
+
 window.pickTopic=t=>{$('aiTopic').value=t;};
+window.setAppFeature=(el,feat)=>{
+  currentAppFeature=feat;
+  document.querySelectorAll('#workspace span.chip').forEach(c=>c.classList.remove('active'));
+  el.classList.add('active');
+};
+
 async function api(path,method='GET',body){
   const response=await fetch(path,{method,headers:{'x-automation-key':apiKey,'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});
   const data=await response.json();
@@ -55,28 +158,239 @@ async function api(path,method='GET',body){
   }
   return data;
 }
+
 async function act(fn){$('message').textContent='';try{await fn();}catch(error){$('message').textContent='⚠️ ' + error.message;}}
 function text(parent,tag,value,cls){const el=document.createElement(tag);el.textContent=value;if(cls)el.className=cls;parent.append(el);return el;}
 function button(parent,label,fn){const el=text(parent,'button',label);el.onclick=()=>act(async()=>{el.disabled=true;try{await fn();await refresh();}finally{el.disabled=false;}});return el;}
-async function refresh(){const [control,posts,comments]=await Promise.all([api('/editorial/control'),api('/editorial/posts'),api('/editorial/comments')]);$('control').textContent=control.paused?'Automatización pausada':control.scheduler_enabled?'Programador habilitado':'Programador deshabilitado en el servicio';$('posts').replaceChildren();$('comments').replaceChildren();if(!posts.length)text($('posts'),'p','Todavía no hay borradores.');for(const item of posts){const card=document.createElement('article');$('posts').append(card);text(card,'span',labels[item.status]||item.status,'status');text(card,'h2',`${item.platform==='facebook'?'Facebook':'Instagram'} · #${item.id}`);text(card,'p',`Destino: ${item.target_id} · Zona: ${item.timezone}`,'muted');text(card,'p',item.caption,'caption');if(item.image_url){const img=document.createElement('img');img.src=item.image_url;img.alt='Imagen del borrador';img.className='preview';img.referrerPolicy='no-referrer';card.append(img);}if(item.publish_at)text(card,'p',`Programado: ${new Date(item.publish_at).toLocaleString('es',{timeZone:item.timezone})} (${item.timezone})`);if(item.external_id)text(card,'p',`ID confirmado: ${item.external_id}`);if(item.permalink){const a=text(card,'a','Ver publicación');a.href=item.permalink;a.target='_blank';a.rel='noopener noreferrer';}if(item.last_error)text(card,'p',`Revisión necesaria: ${item.last_error}`);if(item.status==='draft')button(card,'Aprobar contenido',async()=>{if(confirm(`¿Aprobar esta versión para ${item.platform}, destino ${item.target_id}?`))await api(`/editorial/posts/${item.id}/approve`,'POST');});if(item.status==='approved'){const input=document.createElement('input');input.type='text';input.placeholder='2026-09-14T10:00:00-04:00';input.setAttribute('aria-label',`Fecha con offset para borrador ${item.id}`);card.append(input);button(card,'Programar publicación',async()=>{if(confirm(`¿Publicar el borrador #${item.id} en ${item.platform} el ${input.value}, zona ${item.timezone}?`))await api(`/editorial/posts/${item.id}/schedule`,'POST',{publish_at:input.value});});}if(['draft','approved','scheduled'].includes(item.status))button(card,'Cancelar',()=>api(`/editorial/posts/${item.id}/cancel`,'POST'));if(item.status==='published'&&!item.permalink)button(card,'Recuperar enlace',()=>api(`/editorial/posts/${item.id}/refresh-link`,'POST'));}
-for(const item of comments){const card=document.createElement('article');$('comments').append(card);text(card,'span',labels[item.status],'status');text(card,'h2',`${item.platform} · ${item.user_name}`);text(card,'p',item.comment_text);text(card,'small',`Comentario ${item.comment_id} · ${item.category}`);text(card,'h3','Respuesta sugerida por IA');text(card,'p',item.suggested_reply);}}
-$('connect').onclick=()=>act(async()=>{apiKey=$('key').value;$('key').value='';await refresh();$('workspace').hidden=false;$('login').hidden=true;});
-$('disconnect').onclick=()=>{apiKey='';$('posts').replaceChildren();$('comments').replaceChildren();$('workspace').hidden=true;$('login').hidden=false;};
-$('reload').onclick=()=>act(refresh);$('pause').onclick=()=>act(async()=>{await api('/editorial/control','POST',{paused:true});await refresh();});$('resume').onclick=()=>act(async()=>{if(confirm('¿Reanudar las publicaciones aprobadas y programadas? Las que ya vencieron podrán enviarse.')){await api('/editorial/control','POST',{paused:false});await refresh();}});
-$('draftForm').onsubmit=e=>{e.preventDefault();act(async()=>{await api('/editorial/posts','POST',{idempotency_key:draftKey,platform:$('platform').value,caption:$('caption').value,image_url:$('image').value||null,timezone:$('tz').value});draftKey=crypto.randomUUID();$('caption').value='';$('image').value='';await refresh();$('message').textContent='Borrador guardado. Revisa el destino y el contenido antes de aprobar.';});};
+
+function selectImage(url, elCard){
+  $('image').value=url;
+  $('formImagePreview').src=url;
+  $('imagePreviewContainer').style.display='block';
+  document.querySelectorAll('.gallery-item').forEach(i=>i.classList.remove('selected'));
+  if(elCard) elCard.classList.add('selected');
+}
+
+async function loadMediaGallery(){
+  try{
+    const res=await fetch('/media-assets');
+    const items=await res.json();
+    const gal=$('mediaGallery');
+    gal.replaceChildren();
+    if(!items.length){
+      text(gal,'p','No hay imágenes en el catálogo. Carga tu carpeta de Drive.');
+      return;
+    }
+    for(const item of items){
+      const card=document.createElement('div');
+      card.className='gallery-item';
+      const fullUrl=window.location.origin+item.url;
+      card.onclick=()=>selectImage(fullUrl,card);
+      const img=document.createElement('img');
+      img.src=fullUrl;
+      img.alt=item.title;
+      img.referrerPolicy='no-referrer';
+      const span=document.createElement('span');
+      span.textContent=item.title;
+      card.append(img,span);
+      gal.append(card);
+    }
+  }catch(e){
+    console.error('Error cargando galería:', e);
+  }
+}
+
+async function refresh(){
+  const [control,posts,comments]=await Promise.all([api('/editorial/control'),api('/editorial/posts'),api('/editorial/comments')]);
+  $('control').textContent=control.paused?'Automatización pausada':control.scheduler_enabled?'Programador habilitado':'Programador deshabilitado en el servicio';
+  $('posts').replaceChildren();
+  $('comments').replaceChildren();
+  if(!posts.length)text($('posts'),'p','Todavía no hay borradores.');
+  for(const item of posts){
+    const card=document.createElement('article');
+    $('posts').append(card);
+    text(card,'span',labels[item.status]||item.status,'status');
+    text(card,'h2',`${item.platform==='facebook'?'Facebook':'Instagram'} · #${item.id}`);
+    text(card,'p',`Destino: ${item.target_id} · Zona: ${item.timezone}`,'muted');
+    text(card,'p',item.caption,'caption');
+    if(item.image_url){
+      const img=document.createElement('img');
+      img.src=item.image_url;
+      img.alt='Imagen del borrador';
+      img.className='preview';
+      img.referrerPolicy='no-referrer';
+      card.append(img);
+    }
+    if(item.publish_at)text(card,'p',`Programado: ${new Date(item.publish_at).toLocaleString('es',{timeZone:item.timezone})} (${item.timezone})`);
+    if(item.external_id)text(card,'p',`ID confirmado: ${item.external_id}`);
+    if(item.permalink){
+      const a=text(card,'a','Ver publicación');
+      a.href=item.permalink;
+      a.target='_blank';
+      a.rel='noopener noreferrer';
+    }
+    if(item.last_error)text(card,'p',`Revisión necesaria: ${item.last_error}`);
+    if(item.status==='draft')button(card,'Aprobar contenido',async()=>{if(confirm(`¿Aprobar esta versión para ${item.platform}, destino ${item.target_id}?`))await api(`/editorial/posts/${item.id}/approve`,'POST');});
+    if(item.status==='approved'){
+      const input=document.createElement('input');
+      input.type='text';
+      input.placeholder='2026-09-30T10:00:00-04:00';
+      input.setAttribute('aria-label',`Fecha con offset para borrador ${item.id}`);
+      card.append(input);
+      button(card,'Programar publicación',async()=>{if(confirm(`¿Publicar el borrador #${item.id} en ${item.platform} el ${input.value}, zona ${item.timezone}?`))await api(`/editorial/posts/${item.id}/schedule`,'POST',{publish_at:input.value});});
+    }
+    if(['draft','approved','scheduled'].includes(item.status))button(card,'Cancelar',()=>api(`/editorial/posts/${item.id}/cancel`,'POST'));
+    if(item.status==='published'&&!item.permalink)button(card,'Recuperar enlace',()=>api(`/editorial/posts/${item.id}/refresh-link`,'POST'));
+  }
+  for(const item of comments){
+    const card=document.createElement('article');
+    $('comments').append(card);
+    text(card,'span',labels[item.status],'status');
+    text(card,'h2',`${item.platform} · ${item.user_name}`);
+    text(card,'p',item.comment_text);
+    text(card,'small',`Comentario ${item.comment_id} · ${item.category}`);
+    text(card,'h3','Respuesta sugerida por IA');
+    text(card,'p',item.suggested_reply);
+  }
+}
+
+$('connect').onclick=()=>act(async()=>{
+  apiKey=$('key').value;
+  $('key').value='';
+  await refresh();
+  await loadMediaGallery();
+  $('workspace').hidden=false;
+  $('login').hidden=true;
+});
+
+$('disconnect').onclick=()=>{
+  apiKey='';
+  $('posts').replaceChildren();
+  $('comments').replaceChildren();
+  $('workspace').hidden=true;
+  $('login').hidden=false;
+};
+
+$('reload').onclick=()=>act(async()=>{await refresh();await loadMediaGallery();});
+$('pause').onclick=()=>act(async()=>{await api('/editorial/control','POST',{paused:true});await refresh();});
+$('resume').onclick=()=>act(async()=>{if(confirm('¿Reanudar las publicaciones aprobadas y programadas? Las que ya vencieron podrán enviarse.')){await api('/editorial/control','POST',{paused:false});await refresh();}});
+
+$('draftForm').onsubmit=e=>{
+  e.preventDefault();
+  act(async()=>{
+    await api('/editorial/posts','POST',{
+      idempotency_key:draftKey,
+      platform:$('platform').value,
+      caption:$('caption').value,
+      image_url:$('image').value||null,
+      timezone:$('tz').value
+    });
+    draftKey=crypto.randomUUID();
+    $('caption').value='';
+    $('image').value='';
+    $('imagePreviewContainer').style.display='none';
+    await refresh();
+    $('message').textContent='✅ ¡Borrador guardado! Revisa y pulsa "Aprobar contenido" abajo.';
+  });
+};
+
 $('btnAiGenerate').onclick=()=>act(async()=>{
-  const btn=$('btnAiGenerate');btn.disabled=true;btn.textContent='Generando con IA...';$('message').textContent='Conectando con NVIDIA NIM AI para crear la publicación...';
+  const btn=$('btnAiGenerate');
+  btn.disabled=true;btn.textContent='Generando con IA...';
+  $('message').textContent='Conectando con NVIDIA NIM AI para crear la publicación...';
   try{
     const platform=$('aiPlatform').value;
     const res=await api('/ai/generate-post','POST',{topic:$('aiTopic').value,platform:platform});
     $('platform').value=platform;
     $('caption').value=res.caption;
     if(platform==='instagram'&&!$('image').value){
-      $('image').value=window.location.origin+'/media/demo-privacy-en.jpg';
+      const firstCard=document.querySelector('.gallery-item');
+      if(firstCard) firstCard.click();
+      else $('image').value=window.location.origin+'/media/brand-shield-hero.jpg';
     }
-    $('message').textContent='✨ ¡Publicación generada con éxito por la IA! Revisa o ajusta abajo y pulsa "Guardar borrador".';
+    $('message').textContent='✨ ¡Publicación generada con éxito! Revisa o ajusta el texto y pulsa "Guardar borrador".';
   }finally{
     btn.disabled=false;btn.textContent='✨ Generar con IA';
+  }
+});
+
+$('btnAppPromoGenerate').onclick=()=>act(async()=>{
+  const btn=$('btnAppPromoGenerate');
+  btn.disabled=true;btn.textContent='Generando promoción de la App...';
+  $('message').textContent='NVIDIA NIM AI está creando una campaña persuasiva para la app...';
+  try{
+    const platform=$('appPromoPlatform').value;
+    const cta=$('appPromoCta').value;
+    const res=await api('/ai/generate-app-promo','POST',{feature:currentAppFeature,platform:platform,cta:cta});
+    $('platform').value=platform;
+    $('caption').value=res.caption;
+    
+    // Vista previa en la sección
+    const pBox=$('appPromoPreviewBox'), pText=$('appPromoPreviewText');
+    if(pBox && pText){
+      pBox.style.display='block';
+      pText.textContent=res.caption;
+    }
+
+    // Selección inteligente de imagen de marca oficial según la característica elegida
+    let targetImageName='brand-shield-hero.jpg';
+    if(currentAppFeature==='vpn'||currentAppFeature==='antivirus'){
+      targetImageName='wifi-vpn-security.jpg';
+    }else if(currentAppFeature==='antifraude'){
+      targetImageName='phishing-defense-alert.jpg';
+    }
+
+    let matchedCard=null;
+    document.querySelectorAll('.gallery-item').forEach(card=>{
+      const img=card.querySelector('img');
+      if(img&&img.src.includes(targetImageName)) matchedCard=card;
+    });
+
+    if(matchedCard){
+      matchedCard.click();
+    }else{
+      selectImage(window.location.origin+'/media/'+targetImageName);
+    }
+
+    $('message').textContent='🚀 ¡Campaña de la App generada! Se cargó el copy y la imagen en el formulario. Pulsa "Guardar borrador" abajo para continuar.';
+    document.getElementById('draftForm').scrollIntoView({behavior:'smooth'});
+  }finally{
+    btn.disabled=false;btn.textContent='🚀 Generar Post de la App';
+  }
+});
+
+$('btnSyncDrive').onclick=()=>act(async()=>{
+  const btn=$('btnSyncDrive');
+  btn.disabled=true;btn.textContent='Sincronizando...';
+  $('message').textContent='Conectando con tu carpeta de Google Drive...';
+  try{
+    const folderUrl=$('driveFolderUrl').value;
+    const res=await api('/drive/sync','POST',{folder_url:folderUrl});
+    if(!res.ok){
+      throw Error(res.error||'No se pudieron cargar imágenes de Drive');
+    }
+    const gal=$('mediaGallery');
+    gal.replaceChildren();
+    if(!res.images.length){
+      text(gal,'p','No se encontraron imágenes en la carpeta de Drive proporcionada.');
+      return;
+    }
+    for(const item of res.images){
+      const card=document.createElement('div');
+      card.className='gallery-item';
+      card.onclick=()=>selectImage(item.direct_url, card);
+      const img=document.createElement('img');
+      img.src=item.thumbnail;
+      img.alt=item.name;
+      img.referrerPolicy='no-referrer';
+      const span=document.createElement('span');
+      span.textContent=item.name;
+      card.append(img,span);
+      gal.append(card);
+    }
+    $('message').textContent=`📁 ¡Éxito! Se cargaron ${res.images.length} imágenes de tu Google Drive. Haz clic en cualquiera para usarla.`;
+  }finally{
+    btn.disabled=false;btn.textContent='🔄 Cargar desde Google Drive';
   }
 });
 </script></html>
