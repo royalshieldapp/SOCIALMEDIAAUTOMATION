@@ -29,7 +29,7 @@ def get_drive_api_key() -> str:
 
 
 def get_default_folder_id() -> str:
-    raw = os.getenv("GOOGLE_DRIVE_FOLDER_ID") or os.getenv("GOOGLE_DRIVE_FOLDER_URL") or ""
+    raw = os.getenv("GOOGLE_DRIVE_FOLDER_ID") or os.getenv("GOOGLE_DRIVE_FOLDER_URL") or "1cQRshsc-RXkDYE_e55s72iff419kRHFz"
     return extract_folder_id(raw)
 
 

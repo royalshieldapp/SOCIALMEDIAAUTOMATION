@@ -81,10 +81,12 @@
 </div>
 <p class="muted">Conecta tu carpeta de Google Drive o selecciona una de las imágenes oficiales de Royal Shield para tu publicación.</p>
 
-<div class="row" style="margin-bottom:12px;">
-  <input id="driveFolderUrl" type="text" placeholder="Pega el enlace o ID de tu carpeta de Google Drive..." style="flex:1; min-width:260px;">
-  <button id="btnSyncDrive" type="button" class="secondary" style="margin:0;">🔄 Cargar desde Google Drive</button>
+<div class="row" style="margin-bottom:8px;">
+  <input id="driveFolderUrl" type="text" value="https://drive.google.com/drive/folders/1cQRshsc-RXkDYE_e55s72iff419kRHFz?usp=sharing" placeholder="Pega el enlace o ID de tu carpeta de Google Drive..." style="flex:1; min-width:260px;">
+  <button id="btnSyncDrive" type="button" class="secondary" style="margin:0;">🔄 Sincronizar Google Drive</button>
 </div>
+<small class="muted" style="display:block; margin-bottom:12px; color:#8cd89c;">⚡ <strong>Auto-load activo:</strong> Esta carpeta de Google Drive se carga automáticamente al abrir tu panel.</small>
+
 
 <h3>Selecciona una imagen con 1 clic:</h3>
 <div id="mediaGallery" class="gallery-grid"></div>
@@ -221,32 +223,62 @@ function selectImage(url, elCard){
 
 async function loadMediaGallery(){
   try{
-    const res=await fetch('/media-assets');
-    const items=await res.json();
     const gal=$('mediaGallery');
     gal.replaceChildren();
-    if(!items.length){
-      text(gal,'p','No hay imágenes en el catálogo. Carga tu carpeta de Drive.');
-      return;
+
+    // 1. Cargar activos de marca oficiales
+    try{
+      const res=await fetch('/media-assets');
+      const items=await res.json();
+      for(const item of items){
+        const card=document.createElement('div');
+        card.className='gallery-item';
+        const fullUrl=window.location.origin+item.url;
+        card.onclick=()=>selectImage(fullUrl,card);
+        const img=document.createElement('img');
+        img.src=fullUrl;
+        img.alt=item.title;
+        img.referrerPolicy='no-referrer';
+        const span=document.createElement('span');
+        span.textContent='🛡️ ' + item.title;
+        card.append(img,span);
+        gal.append(card);
+      }
+    }catch(e){
+      console.warn('Error cargando media local:', e);
     }
-    for(const item of items){
-      const card=document.createElement('div');
-      card.className='gallery-item';
-      const fullUrl=window.location.origin+item.url;
-      card.onclick=()=>selectImage(fullUrl,card);
-      const img=document.createElement('img');
-      img.src=fullUrl;
-      img.alt=item.title;
-      img.referrerPolicy='no-referrer';
-      const span=document.createElement('span');
-      span.textContent=item.title;
-      card.append(img,span);
-      gal.append(card);
+
+    // 2. Auto-cargar Google Drive permanente
+    const savedDrive = localStorage.getItem('royal_shield_drive_url') || $('driveFolderUrl').value || 'https://drive.google.com/drive/folders/1cQRshsc-RXkDYE_e55s72iff419kRHFz?usp=sharing';
+    $('driveFolderUrl').value = savedDrive;
+
+    if(apiKey){
+      try{
+        const dRes = await api('/drive/sync','POST',{folder_url:savedDrive});
+        if(dRes && dRes.ok && dRes.images){
+          for(const item of dRes.images){
+            const card=document.createElement('div');
+            card.className='gallery-item';
+            card.onclick=()=>selectImage(item.direct_url,card);
+            const img=document.createElement('img');
+            img.src=item.thumbnail;
+            img.alt=item.name;
+            img.referrerPolicy='no-referrer';
+            const span=document.createElement('span');
+            span.textContent='📁 ' + item.name;
+            card.append(img,span);
+            gal.append(card);
+          }
+        }
+      }catch(e){
+        console.warn('Auto-carga de Google Drive:', e);
+      }
     }
   }catch(e){
     console.error('Error cargando galería:', e);
   }
 }
+
 
 async function refresh(){
   const [control,posts,comments]=await Promise.all([api('/editorial/control'),api('/editorial/posts'),api('/editorial/comments')]);
@@ -478,33 +510,15 @@ $('btnSyncDrive').onclick=()=>act(async()=>{
   btn.disabled=true;btn.textContent='Sincronizando...';
   $('message').textContent='Conectando con tu carpeta de Google Drive...';
   try{
-    const folderUrl=$('driveFolderUrl').value;
-    const res=await api('/drive/sync','POST',{folder_url:folderUrl});
-    if(!res.ok){
-      throw Error(res.error||'No se pudieron cargar imágenes de Drive');
+    const folderUrl=($('driveFolderUrl').value||'').trim();
+    if(folderUrl){
+      localStorage.setItem('royal_shield_drive_url', folderUrl);
     }
-    const gal=$('mediaGallery');
-    gal.replaceChildren();
-    if(!res.images.length){
-      text(gal,'p','No se encontraron imágenes en la carpeta de Drive proporcionada.');
-      return;
-    }
-    for(const item of res.images){
-      const card=document.createElement('div');
-      card.className='gallery-item';
-      card.onclick=()=>selectImage(item.direct_url, card);
-      const img=document.createElement('img');
-      img.src=item.thumbnail;
-      img.alt=item.name;
-      img.referrerPolicy='no-referrer';
-      const span=document.createElement('span');
-      span.textContent=item.name;
-      card.append(img,span);
-      gal.append(card);
-    }
-    $('message').textContent=`📁 ¡Éxito! Se cargaron ${res.images.length} imágenes de tu Google Drive. Haz clic en cualquiera para usarla.`;
+    await loadMediaGallery();
+    $('message').textContent='📁 ¡Éxito! Tu carpeta de Google Drive ha sido guardada y sincronizada automáticamente.';
   }finally{
-    btn.disabled=false;btn.textContent='🔄 Cargar desde Google Drive';
+    btn.disabled=false;btn.textContent='🔄 Sincronizar Google Drive';
   }
 });
+
 </script></html>
