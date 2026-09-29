@@ -301,7 +301,29 @@ async function refresh(){
       img.referrerPolicy='no-referrer';
       card.append(img);
     }
-    if(item.publish_at)text(card,'p',`Programado: ${new Date(item.publish_at).toLocaleString('es',{timeZone:item.timezone})} (${item.timezone})`);
+    if(item.status==='draft'){
+      const dBox=document.createElement('div');
+      dBox.style.cssText='background:#211c12;border:1px solid #6b521b;border-radius:8px;padding:10px 14px;margin:10px 0;';
+      dBox.innerHTML='<strong style="color:#f5d78a;display:block;margin-bottom:2px;">📌 Estado: BORRADOR (Aún no tiene fecha asignada)</strong><span style="font-size:12px;color:#ccc;">Este post está guardado pero <strong>no se publicará todavía</strong>. Pulsa el botón <strong>"Aprobar contenido"</strong> abajo para activar la fecha y hora de publicación.</span>';
+      card.append(dBox);
+    } else if(item.status==='approved'){
+      const aBox=document.createElement('div');
+      aBox.style.cssText='background:#121f2b;border:1px solid #235882;border-radius:8px;padding:10px 14px;margin:10px 0;';
+      aBox.innerHTML='<strong style="color:#8ec9fa;display:block;margin-bottom:2px;">✅ Estado: APROBADO (Listo para programar)</strong><span style="font-size:12px;color:#ccc;">Elige abajo la fecha y hora en la que saldrá a tus redes (ej. 4:00 AM) y pulsa <strong>"Programar publicación"</strong>.</span>';
+      card.append(aBox);
+    } else if(item.status==='scheduled' && item.publish_at){
+      const sBox=document.createElement('div');
+      sBox.style.cssText='background:#142619;border:1px solid #327544;border-radius:8px;padding:12px 14px;margin:12px 0;';
+      const fechaLocal = new Date(item.publish_at).toLocaleString('es',{dateStyle:'full',timeStyle:'short',timeZone:item.timezone});
+      sBox.innerHTML=`<strong style="color:#8ce69f;font-size:14px;display:block;margin-bottom:4px;">⏰ FECHA DE SALIDA CONFIRMADA:</strong><div style="font-size:15px;color:#fff;font-weight:700;margin-bottom:4px;">📅 ${fechaLocal}</div><small style="color:#9ad8a9;">Zona horaria: ${item.timezone} · El servidor lo enviará a Meta automáticamente cuando llegue este momento.</small>`;
+      card.append(sBox);
+    } else if(item.status==='published'){
+      const pBox=document.createElement('div');
+      pBox.style.cssText='background:#19221a;border:1px solid #3c5e40;border-radius:8px;padding:8px 12px;margin:8px 0;';
+      pBox.innerHTML='<span style="color:#8ce69f;font-weight:700;">🎉 ¡PUBLICADO EXITOSAMENTE EN META!</span>';
+      card.append(pBox);
+    }
+
     if(item.external_id)text(card,'p',`ID confirmado: ${item.external_id}`);
     if(item.permalink){
       const a=text(card,'a','Ver publicación');
@@ -311,6 +333,7 @@ async function refresh(){
     }
     if(item.last_error)text(card,'p',`Revisión necesaria: ${item.last_error}`);
     if(item.status==='draft')button(card,'Aprobar contenido',async()=>{if(confirm(`¿Aprobar esta versión para ${item.platform}, destino ${item.target_id}?`))await api(`/editorial/posts/${item.id}/approve`,'POST');});
+
     if(item.status==='approved'){
       const schDiv=document.createElement('div');
       schDiv.style.cssText='margin:12px 0;padding:14px;background:#0d1017;border:1px solid #363c48;border-radius:10px;';
