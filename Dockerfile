@@ -17,7 +17,7 @@ WORKDIR /app
 COPY --from=builder /root/.local /root/.local
 COPY SOCIALMEDIAAUTOMATION.py .
 COPY scheduler_daemon.py .
-COPY editorial.py studio.html ./
+COPY editorial.py studio.html ai_content.py ./
 COPY content/demo-privacy-en.jpg ./content/demo-privacy-en.jpg
 
 RUN mkdir -p /data
