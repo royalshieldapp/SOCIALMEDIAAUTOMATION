@@ -109,8 +109,18 @@
         <small class="muted">Vista previa de la imagen seleccionada:</small>
         <img id="formImagePreview" class="preview" alt="Vista previa">
       </div>
-      <label for="tz">Zona horaria</label>
-      <input id="tz" value="America/New_York" required>
+      <label for="tz">Zona horaria de publicación</label>
+      <select id="tz" required>
+        <option value="America/Santo_Domingo">Rep. Dominicana / Caribe (America/Santo_Domingo)</option>
+        <option value="America/New_York" selected>Costa Este EE.UU. / Miami / New York (America/New_York)</option>
+        <option value="America/Bogota">Colombia / Perú / Ecuador / Panamá (America/Bogota)</option>
+        <option value="America/Mexico_City">México CDMX (America/Mexico_City)</option>
+        <option value="America/Caracas">Venezuela (America/Caracas)</option>
+        <option value="America/Argentina/Buenos_Aires">Argentina / Uruguay (America/Argentina/Buenos_Aires)</option>
+        <option value="America/Santiago">Chile (America/Santiago)</option>
+        <option value="Europe/Madrid">España / Madrid (Europe/Madrid)</option>
+      </select>
+      <small class="muted" style="display:block;margin:4px 0 10px;">Determina la hora exacta local para tu audiencia.</small>
       <button type="submit">Guardar borrador</button>
     </form>
   </section>
@@ -145,6 +155,44 @@ window.setAppFeature=(el,feat)=>{
   document.querySelectorAll('#workspace span.chip').forEach(c=>c.classList.remove('active'));
   el.classList.add('active');
 };
+
+function buildOffsetIso(datetimeLocalVal, timeZone) {
+  const [datePart, timePart] = datetimeLocalVal.split('T');
+  const [y, m, d] = datePart.split('-').map(Number);
+  const [hh, mm] = timePart.split(':').map(Number);
+  const testDate = new Date(Date.UTC(y, m - 1, d, hh, mm, 0));
+  
+  let offset = '-04:00';
+  try {
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: timeZone || 'America/New_York',
+      timeZoneName: 'longOffset'
+    });
+    const parts = formatter.formatToParts(testDate);
+    const tzPart = parts.find(p => p.type === 'timeZoneName');
+    if (tzPart && tzPart.value) {
+      const match = tzPart.value.match(/GMT([+-]\d{2}:\d{2})/);
+      if (match) offset = match[1];
+      else if (tzPart.value === 'GMT') offset = '+00:00';
+    }
+  } catch(e) {}
+  return `${datePart}T${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}:00${offset}`;
+}
+
+try {
+  const detectedTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if(detectedTz) {
+    let opt = document.querySelector(`#tz option[value="${detectedTz}"]`);
+    if(!opt) {
+      opt = document.createElement('option');
+      opt.value = detectedTz;
+      opt.textContent = `📍 Tu zona detectada (${detectedTz})`;
+      $('tz').prepend(opt);
+    }
+    $('tz').value = detectedTz;
+  }
+} catch(e) {}
+
 
 async function api(path,method='GET',body){
   const response=await fetch(path,{method,headers:{'x-automation-key':apiKey,'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});
@@ -232,13 +280,79 @@ async function refresh(){
     if(item.last_error)text(card,'p',`Revisión necesaria: ${item.last_error}`);
     if(item.status==='draft')button(card,'Aprobar contenido',async()=>{if(confirm(`¿Aprobar esta versión para ${item.platform}, destino ${item.target_id}?`))await api(`/editorial/posts/${item.id}/approve`,'POST');});
     if(item.status==='approved'){
+      const schDiv=document.createElement('div');
+      schDiv.style.cssText='margin:12px 0;padding:14px;background:#0d1017;border:1px solid #363c48;border-radius:10px;';
+
+      const label=document.createElement('label');
+      label.textContent=`⏰ Fecha y hora de publicación (${item.timezone}):`;
+      label.style.cssText='margin:0 0 6px;color:#d8b669;font-weight:600;font-size:13px;display:block;';
+      
       const input=document.createElement('input');
-      input.type='text';
-      input.placeholder='2026-09-30T10:00:00-04:00';
-      input.setAttribute('aria-label',`Fecha con offset para borrador ${item.id}`);
-      card.append(input);
-      button(card,'Programar publicación',async()=>{if(confirm(`¿Publicar el borrador #${item.id} en ${item.platform} el ${input.value}, zona ${item.timezone}?`))await api(`/editorial/posts/${item.id}/schedule`,'POST',{publish_at:input.value});});
+      input.type='datetime-local';
+      input.style.cssText='margin-bottom:8px;font-size:15px;';
+
+      const btnRow=document.createElement('div');
+      btnRow.style.cssText='display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;';
+
+      function setDateVal(d, h, m) {
+        const year = d.getFullYear();
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        input.value = `${year}-${month}-${day}T${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+      }
+
+      const now = new Date();
+      const today4am = new Date();
+      today4am.setHours(4, 0, 0, 0);
+
+      if (today4am > now) {
+        const bToday=document.createElement('button');
+        bToday.type='button';
+        bToday.className='secondary';
+        bToday.style.cssText='padding:4px 10px;font-size:12px;margin:0;';
+        bToday.textContent='⏰ Hoy a las 4:00 AM';
+        bToday.onclick=()=>setDateVal(today4am, 4, 0);
+        btnRow.append(bToday);
+      }
+
+      const tmrw4am = new Date();
+      tmrw4am.setDate(tmrw4am.getDate() + 1);
+      tmrw4am.setHours(4, 0, 0, 0);
+      const bTmrw=document.createElement('button');
+      bTmrw.type='button';
+      bTmrw.className='secondary';
+      bTmrw.style.cssText='padding:4px 10px;font-size:12px;margin:0;';
+      bTmrw.textContent='⏰ Mañana a las 4:00 AM';
+      bTmrw.onclick=()=>setDateVal(tmrw4am, 4, 0);
+      btnRow.append(bTmrw);
+
+      const in1h = new Date(Date.now() + 3600000);
+      const b1h=document.createElement('button');
+      b1h.type='button';
+      b1h.className='secondary';
+      b1h.style.cssText='padding:4px 10px;font-size:12px;margin:0;';
+      b1h.textContent='⏰ En 1 hora';
+      b1h.onclick=()=>setDateVal(in1h, in1h.getHours(), in1h.getMinutes());
+      btnRow.append(b1h);
+
+      if (today4am > now) {
+        setDateVal(today4am, 4, 0);
+      } else {
+        setDateVal(tmrw4am, 4, 0);
+      }
+
+      schDiv.append(label, input, btnRow);
+      card.append(schDiv);
+
+      button(card,'Programar publicación',async()=>{
+        if(!input.value) throw Error('Por favor selecciona una fecha y hora');
+        const formattedDate = buildOffsetIso(input.value, item.timezone);
+        if(confirm(`¿Confirmar publicación en ${item.platform} el ${input.value.replace('T', ' a las ')} (${item.timezone})?`)){
+          await api(`/editorial/posts/${item.id}/schedule`,'POST',{publish_at: formattedDate});
+        }
+      });
     }
+
     if(['draft','approved','scheduled'].includes(item.status))button(card,'Cancelar',()=>api(`/editorial/posts/${item.id}/cancel`,'POST'));
     if(item.status==='published'&&!item.permalink)button(card,'Recuperar enlace',()=>api(`/editorial/posts/${item.id}/refresh-link`,'POST'));
   }
