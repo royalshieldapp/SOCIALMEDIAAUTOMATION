@@ -138,8 +138,69 @@
   </section>
 </div>
 
-<h2>Publicaciones</h2>
-<div id="posts"></div>
+<!-- SECCIÓN DE MÉTRICAS & HISTORIAL EDITORIAL -->
+<section style="background:linear-gradient(160deg, #131720, #0d0f14); border:1px solid #3c4252; border-radius:18px; padding:24px; margin:24px 0; box-shadow:0 8px 30px rgba(0,0,0,0.5);">
+  <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:16px;">
+    <div>
+      <h2 style="font-size:24px; margin:0 0 4px; display:flex; align-items:center; gap:8px;">
+        <span>📊</span> Historial de Publicaciones & Métricas
+      </h2>
+      <p class="muted" style="margin:0; font-size:14px;">Seguimiento en tiempo real de publicaciones, interacciones y engagement en Meta (Instagram & Facebook).</p>
+    </div>
+    <button id="btnRefreshMetrics" class="secondary" type="button" style="margin:0; font-size:13px; padding:6px 14px;">🔄 Actualizar Métricas</button>
+  </div>
+
+  <!-- KPI SUMMARY CARDS -->
+  <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(170px, 1fr)); gap:12px; margin-bottom:20px;">
+    <div style="background:#181c26; border:1px solid #2e3547; border-radius:12px; padding:16px; text-align:center;">
+      <small style="color:#8ba2c4; text-transform:uppercase; font-size:11px; letter-spacing:1px; font-weight:700;">🚀 Total Publicados</small>
+      <div id="kpiPublished" style="font-size:32px; font-weight:800; color:#8ce69f; margin:6px 0;">0</div>
+      <small id="kpiPlatformBreakdown" style="color:#aaa; font-size:12px;">📸 0 IG · 👥 0 FB</small>
+    </div>
+
+    <div style="background:#181c26; border:1px solid #2e3547; border-radius:12px; padding:16px; text-align:center;">
+      <small style="color:#8ba2c4; text-transform:uppercase; font-size:11px; letter-spacing:1px; font-weight:700;">⏰ En Calendario</small>
+      <div id="kpiScheduled" style="font-size:32px; font-weight:800; color:#f5d78a; margin:6px 0;">0</div>
+      <small style="color:#aaa; font-size:12px;">Salida automática programada</small>
+    </div>
+
+    <div style="background:#181c26; border:1px solid #2e3547; border-radius:12px; padding:16px; text-align:center;">
+      <small style="color:#8ba2c4; text-transform:uppercase; font-size:11px; letter-spacing:1px; font-weight:700;">📝 En Preparación</small>
+      <div id="kpiDrafts" style="font-size:32px; font-weight:800; color:#9ec5fe; margin:6px 0;">0</div>
+      <small id="kpiDraftsSub" style="color:#aaa; font-size:12px;">0 borradores · 0 aprobados</small>
+    </div>
+
+    <div style="background:#181c26; border:1px solid #2e3547; border-radius:12px; padding:16px; text-align:center;">
+      <small style="color:#8ba2c4; text-transform:uppercase; font-size:11px; letter-spacing:1px; font-weight:700;">💬 Comentarios</small>
+      <div id="kpiComments" style="font-size:32px; font-weight:800; color:#e0cffc; margin:6px 0;">0</div>
+      <small style="color:#aaa; font-size:12px;">Interacciones de seguidores</small>
+    </div>
+
+    <div style="background:#181c26; border:1px solid #2e3547; border-radius:12px; padding:16px; text-align:center;">
+      <small style="color:#8ba2c4; text-transform:uppercase; font-size:11px; letter-spacing:1px; font-weight:700;">📈 Tasa de Éxito</small>
+      <div id="kpiSuccessRate" style="font-size:32px; font-weight:800; color:#78e2a0; margin:6px 0;">100%</div>
+      <small id="kpiTotalPosts" style="color:#aaa; font-size:12px;">De 0 publicaciones totales</small>
+    </div>
+  </div>
+
+  <!-- FILTROS Y BÚSQUEDA DEL HISTORIAL -->
+  <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:16px; padding-bottom:14px; border-bottom:1px solid #282c38;">
+    <div id="historyFilterChips" style="display:flex; gap:8px; flex-wrap:wrap;">
+      <span class="chip active" onclick="setHistoryFilter('all', this)">Todos (<span id="filterCountAll">0</span>)</span>
+      <span class="chip" onclick="setHistoryFilter('published', this)">🎉 Publicados (<span id="filterCountPublished">0</span>)</span>
+      <span class="chip" onclick="setHistoryFilter('scheduled', this)">⏰ Programados (<span id="filterCountScheduled">0</span>)</span>
+      <span class="chip" onclick="setHistoryFilter('approved', this)">✅ Aprobados (<span id="filterCountApproved">0</span>)</span>
+      <span class="chip" onclick="setHistoryFilter('draft', this)">📝 Borradores (<span id="filterCountDraft">0</span>)</span>
+      <span class="chip" onclick="setHistoryFilter('review', this)">⚠️ Requiere Revisión (<span id="filterCountReview">0</span>)</span>
+    </div>
+    <div style="min-width:220px; flex:1; max-width:320px;">
+      <input id="historySearchInput" type="text" placeholder="🔍 Buscar en el historial..." oninput="filterHistoryList()" style="padding:8px 12px; font-size:13px; margin:0;">
+    </div>
+  </div>
+
+  <!-- LISTA DINÁMICA DE PUBLICACIONES -->
+  <div id="posts"></div>
+</section>
 
 <h2>Comentarios para revisión</h2>
 <p class="muted">Respuestas sugeridas por la IA a comentarios reales de tus seguidores.</p>
@@ -280,74 +341,237 @@ async function loadMediaGallery(){
 }
 
 
-async function refresh(){
-  const [control,posts,comments]=await Promise.all([api('/editorial/control'),api('/editorial/posts'),api('/editorial/comments')]);
-  $('control').textContent=control.paused?'Automatización pausada':control.scheduler_enabled?'Programador habilitado':'Programador deshabilitado en el servicio';
-  $('posts').replaceChildren();
-  $('comments').replaceChildren();
-  if(!posts.length)text($('posts'),'p','Todavía no hay borradores.');
-  for(const item of posts){
-    const card=document.createElement('article');
-    $('posts').append(card);
-    text(card,'span',labels[item.status]||item.status,'status');
-    text(card,'h2',`${item.platform==='facebook'?'Facebook':'Instagram'} · #${item.id}`);
-    text(card,'p',`Destino: ${item.target_id} · Zona: ${item.timezone}`,'muted');
-    text(card,'p',item.caption,'caption');
-    if(item.image_url){
-      const img=document.createElement('img');
-      img.src=item.image_url;
-      img.alt='Imagen del borrador';
-      img.className='preview';
-      img.referrerPolicy='no-referrer';
+let cachedPosts = [];
+let currentHistoryFilter = 'all';
+
+window.setHistoryFilter = (filter, el) => {
+  currentHistoryFilter = filter;
+  document.querySelectorAll('#historyFilterChips span.chip').forEach(c => c.classList.remove('active'));
+  if (el) el.classList.add('active');
+  renderFilteredPosts();
+};
+
+window.filterHistoryList = () => {
+  renderFilteredPosts();
+};
+
+window.loadPostMetrics = async function(postId, btn) {
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Consultando a Meta...';
+  try {
+    const data = await api(`/editorial/posts/${postId}/metrics`);
+    const card = btn.closest('article');
+    if (card && data.available && data.metrics) {
+      const m = data.metrics;
+      const likesEl = card.querySelector('.metric-likes');
+      const commentsEl = card.querySelector('.metric-comments');
+      const thirdEl = card.querySelector('.metric-third');
+      const tsEl = card.querySelector('.metrics-timestamp');
+      if (likesEl) likesEl.textContent = m.likes ?? m.reactions ?? 0;
+      if (commentsEl) commentsEl.textContent = m.comments ?? 0;
+      if (thirdEl) thirdEl.textContent = (m.platform === 'facebook' ? (m.shares ?? 0) : (m.reach ?? m.impressions ?? 'N/A'));
+      if (tsEl) tsEl.textContent = `Actualizado: ${new Date().toLocaleTimeString()} · Datos en vivo desde Meta`;
+      $('message').textContent = '✅ Métricas de la publicación actualizadas desde Meta.';
+    } else if (data.message) {
+      $('message').textContent = 'ℹ️ ' + data.message;
+    }
+  } catch (e) {
+    $('message').textContent = '⚠️ ' + e.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalText;
+  }
+};
+
+function renderFilteredPosts() {
+  const container = $('posts');
+  container.replaceChildren();
+
+  const query = ($('historySearchInput')?.value || '').trim().toLowerCase();
+  const filtered = cachedPosts.filter(item => {
+    // 1. Filtro por categoría
+    if (currentHistoryFilter === 'published' && item.status !== 'published') return false;
+    if (currentHistoryFilter === 'scheduled' && item.status !== 'scheduled') return false;
+    if (currentHistoryFilter === 'approved' && item.status !== 'approved') return false;
+    if (currentHistoryFilter === 'draft' && item.status !== 'draft') return false;
+    if (currentHistoryFilter === 'review' && !['needs_review', 'failed'].includes(item.status)) return false;
+
+    // 2. Búsqueda por texto
+    if (query) {
+      const matchText = `${item.id} ${item.platform} ${item.caption || ''} ${item.status} ${item.target_id || ''} ${item.external_id || ''}`.toLowerCase();
+      if (!matchText.includes(query)) return false;
+    }
+    return true;
+  });
+
+  if (!filtered.length) {
+    const emptyMsg = document.createElement('p');
+    emptyMsg.className = 'muted';
+    emptyMsg.style.cssText = 'padding:20px; text-align:center; background:#11141b; border-radius:10px; border:1px dashed #303644;';
+    emptyMsg.textContent = query || currentHistoryFilter !== 'all' ? 'No se encontraron publicaciones con los filtros seleccionados.' : 'Todavía no hay publicaciones registradas en el historial.';
+    container.append(emptyMsg);
+    return;
+  }
+
+  for (const item of filtered) {
+    const card = document.createElement('article');
+    card.style.cssText = 'background:#14171f; border:1px solid #2e3340; border-radius:14px; padding:20px; margin:16px 0; transition:border 0.2s;';
+    container.append(card);
+
+    // Cabecera con plataforma y badges
+    const headerRow = document.createElement('div');
+    headerRow.style.cssText = 'display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:10px;';
+
+    const leftBadges = document.createElement('div');
+    leftBadges.style.cssText = 'display:flex; align-items:center; gap:8px; flex-wrap:wrap;';
+
+    // Plataforma
+    const platBadge = document.createElement('span');
+    if (item.platform === 'instagram') {
+      platBadge.style.cssText = 'background:linear-gradient(45deg,#f09433,#e6683c,#dc2743,#cc2366,#bc1888); color:#fff; font-weight:700; padding:4px 12px; border-radius:14px; font-size:12px; display:inline-flex; align-items:center; gap:4px;';
+      platBadge.innerHTML = '📸 Instagram';
+    } else {
+      platBadge.style.cssText = 'background:#1877f2; color:#fff; font-weight:700; padding:4px 12px; border-radius:14px; font-size:12px; display:inline-flex; align-items:center; gap:4px;';
+      platBadge.innerHTML = '👥 Facebook';
+    }
+
+    // Estado
+    const statusBadge = document.createElement('span');
+    statusBadge.className = 'status';
+    if (item.status === 'published') {
+      statusBadge.style.cssText = 'background:#16321f; color:#8ce69f; border:1px solid #2d6b3f; font-weight:700;';
+    } else if (item.status === 'scheduled') {
+      statusBadge.style.cssText = 'background:#2c2514; color:#f5d78a; border:1px solid #6b572a; font-weight:700;';
+    } else if (item.status === 'approved') {
+      statusBadge.style.cssText = 'background:#132435; color:#9ec5fe; border:1px solid #285580; font-weight:700;';
+    } else if (['needs_review', 'failed'].includes(item.status)) {
+      statusBadge.style.cssText = 'background:#361919; color:#f89b9b; border:1px solid #752d2d; font-weight:700;';
+    }
+    statusBadge.textContent = labels[item.status] || item.status;
+
+    leftBadges.append(platBadge, statusBadge);
+
+    const idLabel = document.createElement('span');
+    idLabel.style.cssText = 'color:#8892a6; font-size:12px; font-weight:600;';
+    idLabel.textContent = `ID #${item.id}`;
+
+    headerRow.append(leftBadges, idLabel);
+    card.append(headerRow);
+
+    // Metadata
+    const metaInfo = document.createElement('div');
+    metaInfo.style.cssText = 'font-size:12px; color:#858c9c; margin-bottom:10px; display:flex; flex-wrap:wrap; gap:12px;';
+    const fechaCreacion = item.created_at ? new Date(item.created_at).toLocaleString('es', {dateStyle:'short', timeStyle:'short'}) : 'N/A';
+    metaInfo.innerHTML = `<span>📅 Creado: ${fechaCreacion}</span><span>🎯 Destino: ${item.target_id}</span><span>🌐 Zona: ${item.timezone}</span>`;
+    card.append(metaInfo);
+
+    // Caption
+    const captionEl = document.createElement('p');
+    captionEl.className = 'caption';
+    captionEl.style.cssText = 'font-size:14px; line-height:1.55; color:#ddd; margin:10px 0; background:#0c0e12; padding:12px 14px; border-radius:8px; border:1px solid #232733;';
+    captionEl.textContent = item.caption;
+    card.append(captionEl);
+
+    // Imagen previa
+    if (item.image_url) {
+      const img = document.createElement('img');
+      img.src = item.image_url;
+      img.alt = 'Imagen de la publicación';
+      img.className = 'preview';
+      img.referrerPolicy = 'no-referrer';
       card.append(img);
     }
-    if(item.status==='draft'){
-      const dBox=document.createElement('div');
-      dBox.style.cssText='background:#211c12;border:1px solid #6b521b;border-radius:8px;padding:10px 14px;margin:10px 0;';
-      dBox.innerHTML='<strong style="color:#f5d78a;display:block;margin-bottom:2px;">📌 Estado: BORRADOR (Aún no tiene fecha asignada)</strong><span style="font-size:12px;color:#ccc;">Este post está guardado pero <strong>no se publicará todavía</strong>. Pulsa el botón <strong>"Aprobar contenido"</strong> abajo para activar la fecha y hora de publicación.</span>';
+
+    // Banners de estado contextual
+    if (item.status === 'draft') {
+      const dBox = document.createElement('div');
+      dBox.style.cssText = 'background:#211c12;border:1px solid #6b521b;border-radius:8px;padding:10px 14px;margin:10px 0;';
+      dBox.innerHTML = '<strong style="color:#f5d78a;display:block;margin-bottom:2px;">📌 Estado: BORRADOR (Aún no tiene fecha asignada)</strong><span style="font-size:12px;color:#ccc;">Este post está guardado pero <strong>no se publicará todavía</strong>. Pulsa el botón <strong>"Aprobar contenido"</strong> abajo para activar la fecha y hora de publicación.</span>';
       card.append(dBox);
-    } else if(item.status==='approved'){
-      const aBox=document.createElement('div');
-      aBox.style.cssText='background:#121f2b;border:1px solid #235882;border-radius:8px;padding:10px 14px;margin:10px 0;';
-      aBox.innerHTML='<strong style="color:#8ec9fa;display:block;margin-bottom:2px;">✅ Estado: APROBADO (Listo para programar)</strong><span style="font-size:12px;color:#ccc;">Elige abajo la fecha y hora en la que saldrá a tus redes (ej. 4:00 AM) y pulsa <strong>"Programar publicación"</strong>.</span>';
+    } else if (item.status === 'approved') {
+      const aBox = document.createElement('div');
+      aBox.style.cssText = 'background:#121f2b;border:1px solid #235882;border-radius:8px;padding:10px 14px;margin:10px 0;';
+      aBox.innerHTML = '<strong style="color:#8ec9fa;display:block;margin-bottom:2px;">✅ Estado: APROBADO (Listo para programar)</strong><span style="font-size:12px;color:#ccc;">Elige abajo la fecha y hora en la que saldrá a tus redes (ej. 4:00 AM) y pulsa <strong>"Programar publicación"</strong>.</span>';
       card.append(aBox);
-    } else if(item.status==='scheduled' && item.publish_at){
-      const sBox=document.createElement('div');
-      sBox.style.cssText='background:#142619;border:1px solid #327544;border-radius:8px;padding:12px 14px;margin:12px 0;';
+    } else if (item.status === 'scheduled' && item.publish_at) {
+      const sBox = document.createElement('div');
+      sBox.style.cssText = 'background:#142619;border:1px solid #327544;border-radius:8px;padding:12px 14px;margin:12px 0;';
       const fechaLocal = new Date(item.publish_at).toLocaleString('es',{dateStyle:'full',timeStyle:'short',timeZone:item.timezone});
-      sBox.innerHTML=`<strong style="color:#8ce69f;font-size:14px;display:block;margin-bottom:4px;">⏰ FECHA DE SALIDA CONFIRMADA:</strong><div style="font-size:15px;color:#fff;font-weight:700;margin-bottom:4px;">📅 ${fechaLocal}</div><small style="color:#9ad8a9;">Zona horaria: ${item.timezone} · El servidor lo enviará a Meta automáticamente cuando llegue este momento.</small>`;
+      sBox.innerHTML = `<strong style="color:#8ce69f;font-size:14px;display:block;margin-bottom:4px;">⏰ FECHA DE SALIDA CONFIRMADA:</strong><div style="font-size:15px;color:#fff;font-weight:700;margin-bottom:4px;">📅 ${fechaLocal}</div><small style="color:#9ad8a9;">Zona horaria: ${item.timezone} · El servidor lo enviará a Meta automáticamente cuando llegue este momento.</small>`;
       card.append(sBox);
-    } else if(item.status==='published'){
-      const pBox=document.createElement('div');
-      pBox.style.cssText='background:#19221a;border:1px solid #3c5e40;border-radius:8px;padding:8px 12px;margin:8px 0;';
-      pBox.innerHTML='<span style="color:#8ce69f;font-weight:700;">🎉 ¡PUBLICADO EXITOSAMENTE EN META!</span>';
+    } else if (item.status === 'published') {
+      const pBox = document.createElement('div');
+      pBox.style.cssText = 'background:#16241b;border:1px solid #2b5435;border-radius:10px;padding:12px 14px;margin:10px 0;';
+      const fechaPub = item.published_at ? new Date(item.published_at).toLocaleString('es', {dateStyle:'medium', timeStyle:'short'}) : 'Confirmado';
+      pBox.innerHTML = `<div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px;"><span style="color:#8ce69f;font-weight:700;font-size:14px;">🎉 PUBLICADO EXITOSAMENTE EN META</span><small style="color:#a8e0b6;">${fechaPub}</small></div><small style="color:#8ca693; display:block; margin-top:3px;">ID externo en Meta: ${item.external_id || 'N/A'}</small>`;
       card.append(pBox);
+
+      // WIDGET DE MÉTRICAS EN VIVO DE META
+      const metricsBox = document.createElement('div');
+      metricsBox.style.cssText = 'background:#0f1218; border:1px solid #273042; border-radius:10px; padding:14px; margin:12px 0;';
+      metricsBox.innerHTML = `
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:10px;">
+          <strong style="color:#8ce69f; font-size:13px; display:flex; align-items:center; gap:6px;">
+            📊 Métricas en Vivo de Meta Graph API
+          </strong>
+          <button type="button" class="secondary" style="margin:0; padding:4px 12px; font-size:12px;" onclick="loadPostMetrics(${item.id}, this)">
+            🔄 Consultar Métricas en Vivo
+          </button>
+        </div>
+        <div class="metrics-grid" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(90px, 1fr)); gap:10px;">
+          <div style="background:#161a24; border:1px solid #232938; border-radius:8px; padding:10px; text-align:center;">
+            <span style="font-size:11px; color:#aaa; display:block; margin-bottom:2px;">❤️ Likes / Reac.</span>
+            <strong class="metric-likes" style="font-size:20px; color:#fff;">--</strong>
+          </div>
+          <div style="background:#161a24; border:1px solid #232938; border-radius:8px; padding:10px; text-align:center;">
+            <span style="font-size:11px; color:#aaa; display:block; margin-bottom:2px;">💬 Comentarios</span>
+            <strong class="metric-comments" style="font-size:20px; color:#fff;">--</strong>
+          </div>
+          <div style="background:#161a24; border:1px solid #232938; border-radius:8px; padding:10px; text-align:center;">
+            <span style="font-size:11px; color:#aaa; display:block; margin-bottom:2px;">${item.platform === 'facebook' ? '🔄 Compartidos' : '👁️ Alcance'}</span>
+            <strong class="metric-third" style="font-size:20px; color:#fff;">--</strong>
+          </div>
+        </div>
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-top:8px;">
+          <small class="metrics-timestamp" style="color:#888; font-size:11px;">Pulsa "Consultar Métricas en Vivo" para consultar interacciones recientes en Meta.</small>
+          ${item.permalink ? `<a href="${item.permalink}" target="_blank" rel="noopener noreferrer" style="color:#f5d78a; font-size:12px; text-decoration:none; font-weight:600; display:inline-flex; align-items:center; gap:4px;">🔗 Ver publicación en ${item.platform==='facebook'?'Facebook':'Instagram'} ↗</a>` : ''}
+        </div>
+      `;
+      card.append(metricsBox);
     }
 
-    if(item.external_id)text(card,'p',`ID confirmado: ${item.external_id}`);
-    if(item.permalink){
-      const a=text(card,'a','Ver publicación');
-      a.href=item.permalink;
-      a.target='_blank';
-      a.rel='noopener noreferrer';
+    if (item.last_error) {
+      const errBox = document.createElement('div');
+      errBox.style.cssText = 'background:#261212; border:1px solid #6b2424; border-radius:8px; padding:8px 12px; margin:8px 0;';
+      errBox.innerHTML = `<span style="color:#f89b9b; font-size:13px;">⚠️ <strong>Revisión necesaria:</strong> ${item.last_error}</span>`;
+      card.append(errBox);
     }
-    if(item.last_error)text(card,'p',`Revisión necesaria: ${item.last_error}`);
-    if(item.status==='draft')button(card,'Aprobar contenido',async()=>{if(confirm(`¿Aprobar esta versión para ${item.platform}, destino ${item.target_id}?`))await api(`/editorial/posts/${item.id}/approve`,'POST');});
 
-    if(item.status==='approved'){
-      const schDiv=document.createElement('div');
-      schDiv.style.cssText='margin:12px 0;padding:14px;background:#0d1017;border:1px solid #363c48;border-radius:10px;';
+    // Acciones para BORRADOR
+    if (item.status === 'draft') {
+      button(card, 'Aprobar contenido', async () => {
+        if (confirm(`¿Aprobar esta versión para ${item.platform}, destino ${item.target_id}?`)) {
+          await api(`/editorial/posts/${item.id}/approve`, 'POST');
+        }
+      });
+    }
 
-      const label=document.createElement('label');
-      label.textContent=`⏰ Fecha y hora de publicación (${item.timezone}):`;
-      label.style.cssText='margin:0 0 6px;color:#d8b669;font-weight:600;font-size:13px;display:block;';
+    // Acciones para APROBADO: Selector de fecha
+    if (item.status === 'approved') {
+      const schDiv = document.createElement('div');
+      schDiv.style.cssText = 'margin:12px 0;padding:14px;background:#0d1017;border:1px solid #363c48;border-radius:10px;';
+
+      const label = document.createElement('label');
+      label.textContent = `⏰ Fecha y hora de publicación (${item.timezone}):`;
+      label.style.cssText = 'margin:0 0 6px;color:#d8b669;font-weight:600;font-size:13px;display:block;';
       
-      const input=document.createElement('input');
-      input.type='datetime-local';
-      input.style.cssText='margin-bottom:8px;font-size:15px;';
+      const input = document.createElement('input');
+      input.type = 'datetime-local';
+      input.style.cssText = 'margin-bottom:8px;font-size:15px;';
 
-      const btnRow=document.createElement('div');
-      btnRow.style.cssText='display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;';
+      const btnRow = document.createElement('div');
+      btnRow.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;';
 
       function setDateVal(d, h, m) {
         const year = d.getFullYear();
@@ -361,33 +585,33 @@ async function refresh(){
       today4am.setHours(4, 0, 0, 0);
 
       if (today4am > now) {
-        const bToday=document.createElement('button');
-        bToday.type='button';
-        bToday.className='secondary';
-        bToday.style.cssText='padding:4px 10px;font-size:12px;margin:0;';
-        bToday.textContent='⏰ Hoy a las 4:00 AM';
-        bToday.onclick=()=>setDateVal(today4am, 4, 0);
+        const bToday = document.createElement('button');
+        bToday.type = 'button';
+        bToday.className = 'secondary';
+        bToday.style.cssText = 'padding:4px 10px;font-size:12px;margin:0;';
+        bToday.textContent = '⏰ Hoy a las 4:00 AM';
+        bToday.onclick = () => setDateVal(today4am, 4, 0);
         btnRow.append(bToday);
       }
 
       const tmrw4am = new Date();
       tmrw4am.setDate(tmrw4am.getDate() + 1);
       tmrw4am.setHours(4, 0, 0, 0);
-      const bTmrw=document.createElement('button');
-      bTmrw.type='button';
-      bTmrw.className='secondary';
-      bTmrw.style.cssText='padding:4px 10px;font-size:12px;margin:0;';
-      bTmrw.textContent='⏰ Mañana a las 4:00 AM';
-      bTmrw.onclick=()=>setDateVal(tmrw4am, 4, 0);
+      const bTmrw = document.createElement('button');
+      bTmrw.type = 'button';
+      bTmrw.className = 'secondary';
+      bTmrw.style.cssText = 'padding:4px 10px;font-size:12px;margin:0;';
+      bTmrw.textContent = '⏰ Mañana a las 4:00 AM';
+      bTmrw.onclick = () => setDateVal(tmrw4am, 4, 0);
       btnRow.append(bTmrw);
 
       const in1h = new Date(Date.now() + 3600000);
-      const b1h=document.createElement('button');
-      b1h.type='button';
-      b1h.className='secondary';
-      b1h.style.cssText='padding:4px 10px;font-size:12px;margin:0;';
-      b1h.textContent='⏰ En 1 hora';
-      b1h.onclick=()=>setDateVal(in1h, in1h.getHours(), in1h.getMinutes());
+      const b1h = document.createElement('button');
+      b1h.type = 'button';
+      b1h.className = 'secondary';
+      b1h.style.cssText = 'padding:4px 10px;font-size:12px;margin:0;';
+      b1h.textContent = '⏰ En 1 hora';
+      b1h.onclick = () => setDateVal(in1h, in1h.getHours(), in1h.getMinutes());
       btnRow.append(b1h);
 
       if (today4am > now) {
@@ -399,28 +623,75 @@ async function refresh(){
       schDiv.append(label, input, btnRow);
       card.append(schDiv);
 
-      button(card,'Programar publicación',async()=>{
-        if(!input.value) throw Error('Por favor selecciona una fecha y hora');
+      button(card, 'Programar publicación', async () => {
+        if (!input.value) throw Error('Por favor selecciona una fecha y hora');
         const formattedDate = buildOffsetIso(input.value, item.timezone);
-        if(confirm(`¿Confirmar publicación en ${item.platform} el ${input.value.replace('T', ' a las ')} (${item.timezone})?`)){
-          await api(`/editorial/posts/${item.id}/schedule`,'POST',{publish_at: formattedDate});
+        if (confirm(`¿Confirmar publicación en ${item.platform} el ${input.value.replace('T', ' a las ')} (${item.timezone})?`)) {
+          await api(`/editorial/posts/${item.id}/schedule`, 'POST', {publish_at: formattedDate});
         }
       });
     }
 
-    if(['draft','approved','scheduled','needs_review','failed'].includes(item.status)){
-      button(card,'⚡ Publicar Ahora Mismo',async()=>{
-        if(confirm(`¿Enviar y publicar de inmediato esta versión en ${item.platform}?`)){
-          $('message').textContent='Enviando a Meta...';
-          await api(`/editorial/posts/${item.id}/publish-now`,'POST');
-          $('message').textContent='🎉 ¡Publicado exitosamente en Meta!';
+    // Botón directo para publicar en Meta de inmediato
+    if (['draft', 'approved', 'scheduled', 'needs_review', 'failed'].includes(item.status)) {
+      button(card, '⚡ Publicar Ahora Mismo', async () => {
+        if (confirm(`¿Enviar y publicar de inmediato esta versión en ${item.platform}?`)) {
+          $('message').textContent = 'Enviando a Meta...';
+          await api(`/editorial/posts/${item.id}/publish-now`, 'POST');
+          $('message').textContent = '🎉 ¡Publicado exitosamente en Meta!';
         }
       });
     }
-    if(['draft','approved','scheduled'].includes(item.status))button(card,'Cancelar',()=>api(`/editorial/posts/${item.id}/cancel`,'POST'));
-    if(item.status==='published'&&!item.permalink)button(card,'Recuperar enlace',()=>api(`/editorial/posts/${item.id}/refresh-link`,'POST'));
 
+    if (['draft', 'approved', 'scheduled'].includes(item.status)) {
+      button(card, 'Cancelar', () => api(`/editorial/posts/${item.id}/cancel`, 'POST'));
+    }
+
+    if (item.status === 'published' && !item.permalink) {
+      button(card, 'Recuperar enlace', () => api(`/editorial/posts/${item.id}/refresh-link`, 'POST'));
+    }
   }
+}
+
+async function refresh(){
+  const [control, posts, comments, metrics] = await Promise.all([
+    api('/editorial/control'),
+    api('/editorial/posts'),
+    api('/editorial/comments'),
+    api('/editorial/metrics/summary')
+  ]);
+  
+  $('control').textContent = control.paused ? 'Automatización pausada' : control.scheduler_enabled ? 'Programador habilitado' : 'Programador deshabilitado en el servicio';
+
+  // Actualizar KPI cards
+  if (metrics) {
+    if ($('kpiPublished')) $('kpiPublished').textContent = metrics.published ?? 0;
+    const igPub = metrics.published_by_platform?.instagram || 0;
+    const fbPub = metrics.published_by_platform?.facebook || 0;
+    if ($('kpiPlatformBreakdown')) $('kpiPlatformBreakdown').textContent = `📸 ${igPub} IG · 👥 ${fbPub} FB`;
+    if ($('kpiScheduled')) $('kpiScheduled').textContent = metrics.scheduled ?? 0;
+    const draftsCnt = metrics.drafts ?? 0;
+    const apprvCnt = metrics.approved ?? 0;
+    if ($('kpiDrafts')) $('kpiDrafts').textContent = draftsCnt + apprvCnt;
+    if ($('kpiDraftsSub')) $('kpiDraftsSub').textContent = `${draftsCnt} borradores · ${apprvCnt} aprobados`;
+    if ($('kpiComments')) $('kpiComments').textContent = metrics.total_comments ?? 0;
+    if ($('kpiSuccessRate')) $('kpiSuccessRate').textContent = `${metrics.success_rate ?? 100}%`;
+    if ($('kpiTotalPosts')) $('kpiTotalPosts').textContent = `De ${metrics.total_posts ?? 0} publicaciones totales`;
+  }
+
+  // Actualizar badges de conteo en los filtros
+  if ($('filterCountAll')) $('filterCountAll').textContent = posts.length;
+  if ($('filterCountPublished')) $('filterCountPublished').textContent = posts.filter(p => p.status === 'published').length;
+  if ($('filterCountScheduled')) $('filterCountScheduled').textContent = posts.filter(p => p.status === 'scheduled').length;
+  if ($('filterCountApproved')) $('filterCountApproved').textContent = posts.filter(p => p.status === 'approved').length;
+  if ($('filterCountDraft')) $('filterCountDraft').textContent = posts.filter(p => p.status === 'draft').length;
+  if ($('filterCountReview')) $('filterCountReview').textContent = posts.filter(p => ['needs_review', 'failed'].includes(p.status)).length;
+
+  cachedPosts = posts;
+  renderFilteredPosts();
+
+  // Render comments
+  $('comments').replaceChildren();
   for(const item of comments){
     const card=document.createElement('article');
     $('comments').append(card);
@@ -450,6 +721,7 @@ $('disconnect').onclick=()=>{
   $('login').hidden=false;
 };
 
+$('btnRefreshMetrics').onclick=()=>act(async()=>{await refresh();});
 $('reload').onclick=()=>act(async()=>{await refresh();await loadMediaGallery();});
 $('pause').onclick=()=>act(async()=>{await api('/editorial/control','POST',{paused:true});await refresh();});
 $('resume').onclick=()=>act(async()=>{if(confirm('¿Reanudar las publicaciones aprobadas y programadas? Las que ya vencieron podrán enviarse.')){await api('/editorial/control','POST',{paused:false});await refresh();}});

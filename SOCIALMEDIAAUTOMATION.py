@@ -737,6 +737,80 @@ async def publication_link(platform: Platform, external_id: str) -> str:
     return value
 
 
+async def fetch_meta_metrics(platform: Platform, external_id: str) -> Dict[str, Any]:
+    token = facebook_token() if platform == "facebook" else instagram_token()
+    host = "graph.facebook.com" if platform == "facebook" else instagram_host()
+    if platform == "facebook":
+        result = await graph_request(
+            external_id,
+            token,
+            {"fields": "id,message,created_time,shares,reactions.summary(true),comments.summary(true),permalink_url"},
+            method="GET",
+            host=host,
+        )
+        reactions_cnt = result.get("reactions", {}).get("summary", {}).get("total_count", 0)
+        comments_cnt = result.get("comments", {}).get("summary", {}).get("total_count", 0)
+        shares_cnt = result.get("shares", {}).get("count", 0)
+        permalink = result.get("permalink_url") or ""
+        return {
+            "platform": "facebook",
+            "external_id": external_id,
+            "reactions": reactions_cnt,
+            "likes": reactions_cnt,
+            "comments": comments_cnt,
+            "shares": shares_cnt,
+            "permalink": permalink,
+            "created_time": result.get("created_time"),
+        }
+    else:
+        result = await graph_request(
+            external_id,
+            token,
+            {"fields": "id,caption,media_type,like_count,comments_count,timestamp,permalink"},
+            method="GET",
+            host=host,
+        )
+        likes_cnt = result.get("like_count", 0)
+        comments_cnt = result.get("comments_count", 0)
+        permalink = result.get("permalink") or ""
+        reach = None
+        impressions = None
+        saved = None
+        try:
+            insights = await graph_request(
+                f"{external_id}/insights",
+                token,
+                {"metric": "impressions,reach,saved"},
+                method="GET",
+                host=host,
+            )
+            for item in insights.get("data", []):
+                name = item.get("name")
+                vals = item.get("values", [])
+                if vals and isinstance(vals, list):
+                    val = vals[0].get("value")
+                    if name == "reach":
+                        reach = val
+                    elif name == "impressions":
+                        impressions = val
+                    elif name == "saved":
+                        saved = val
+        except Exception:
+            pass
+        return {
+            "platform": "instagram",
+            "external_id": external_id,
+            "likes": likes_cnt,
+            "comments": comments_cnt,
+            "shares": 0,
+            "reach": reach,
+            "impressions": impressions,
+            "saved": saved,
+            "permalink": permalink,
+            "timestamp": result.get("timestamp"),
+        }
+
+
 @app.get("/")
 async def root() -> Dict[str, Any]:
     return {
@@ -958,9 +1032,13 @@ async def create_draft(payload: DraftPayload, x_automation_key: Optional[str] = 
 
 
 @app.get("/editorial/posts")
-async def list_drafts(x_automation_key: Optional[str] = Header(default=None)):
+async def list_drafts(
+    status: Optional[str] = None,
+    platform: Optional[str] = None,
+    x_automation_key: Optional[str] = Header(default=None),
+):
     require_automation_key(x_automation_key)
-    return editorial.posts()
+    return editorial.posts(status=status, platform=platform)
 
 
 @app.post("/editorial/posts/{post_id}/approve")
@@ -1008,6 +1086,44 @@ async def publish_post_now(post_id: int, x_automation_key: Optional[str] = Heade
         raise HTTPException(502, f"Publication failed: {error}")
     return editorial.get(post_id)
 
+
+
+@app.get("/editorial/metrics/summary")
+async def editorial_metrics_summary(x_automation_key: Optional[str] = Header(default=None)):
+    require_automation_key(x_automation_key)
+    return editorial.metrics_summary()
+
+
+@app.get("/editorial/posts/{post_id}/metrics")
+async def get_post_metrics(post_id: int, x_automation_key: Optional[str] = Header(default=None)):
+    require_automation_key(x_automation_key)
+    row = editorial.get(post_id)
+    if row.get("status") != "published" or not row.get("external_id"):
+        return {
+            "available": False,
+            "post_id": post_id,
+            "status": row.get("status"),
+            "message": "Las métricas solo están disponibles para publicaciones ya enviadas y publicadas en Meta",
+        }
+    try:
+        metrics_data = await fetch_meta_metrics(row["platform"], row["external_id"])
+        if metrics_data.get("permalink") and not row.get("permalink"):
+            editorial.link(post_id, metrics_data["permalink"])
+        return {
+            "available": True,
+            "post_id": post_id,
+            "status": "published",
+            "metrics": metrics_data,
+        }
+    except Exception as exc:
+        logger.warning(f"Error fetching Meta metrics for post {post_id}: {exc}")
+        return {
+            "available": False,
+            "post_id": post_id,
+            "status": "published",
+            "error": str(exc),
+            "message": "No se pudieron consultar las métricas de Meta en este momento",
+        }
 
 
 @app.post("/editorial/posts/{post_id}/cancel")

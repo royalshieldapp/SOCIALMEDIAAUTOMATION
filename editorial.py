@@ -85,10 +85,55 @@ class EditorialStore:
             raise HTTPException(404, "Draft not found")
         return self.record(row)
 
-    def posts(self):
+    def posts(self, status=None, platform=None):
+        query = "SELECT * FROM editorial_posts"
+        conditions = []
+        params = []
+        if status:
+            conditions.append("status=?")
+            params.append(status)
+        if platform:
+            conditions.append("platform=?")
+            params.append(platform)
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += " ORDER BY id DESC LIMIT 200"
         with self.connect() as conn:
-            rows = conn.execute("SELECT * FROM editorial_posts ORDER BY id DESC LIMIT 200").fetchall()
+            rows = conn.execute(query, params).fetchall()
         return [self.record(row) for row in rows]
+
+    def metrics_summary(self):
+        with self.connect() as conn:
+            total_posts = conn.execute("SELECT COUNT(*) FROM editorial_posts").fetchone()[0]
+            status_rows = conn.execute("SELECT status, COUNT(*) AS total FROM editorial_posts GROUP BY status").fetchall()
+            status_counts = {item["status"]: item["total"] for item in status_rows}
+            platform_rows = conn.execute("SELECT platform, COUNT(*) AS total FROM editorial_posts GROUP BY platform").fetchall()
+            platform_counts = {item["platform"]: item["total"] for item in platform_rows}
+            pub_platform_rows = conn.execute("SELECT platform, COUNT(*) AS total FROM editorial_posts WHERE status='published' GROUP BY platform").fetchall()
+            published_by_platform = {item["platform"]: item["total"] for item in pub_platform_rows}
+            total_comments = conn.execute("SELECT COUNT(*) FROM editorial_comments").fetchone()[0]
+
+            published = status_counts.get("published", 0)
+            scheduled = status_counts.get("scheduled", 0)
+            drafts = status_counts.get("draft", 0)
+            approved = status_counts.get("approved", 0)
+            failed = status_counts.get("failed", 0) + status_counts.get("needs_review", 0)
+            attempts = published + failed
+            success_rate = round((published / attempts) * 100, 1) if attempts > 0 else 100.0
+
+            return {
+                "total_posts": total_posts,
+                "published": published,
+                "scheduled": scheduled,
+                "drafts": drafts,
+                "approved": approved,
+                "failed": failed,
+                "success_rate": success_rate,
+                "status_counts": status_counts,
+                "platform_counts": platform_counts,
+                "published_by_platform": published_by_platform,
+                "total_comments": total_comments,
+            }
 
     def create(self, payload, key, target_id, timezone_name):
         zone(timezone_name)

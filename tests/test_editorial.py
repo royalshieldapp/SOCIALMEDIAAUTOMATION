@@ -425,3 +425,52 @@ def test_graph_error_preserves_diagnostics_without_credentials(client):
     assert "Rejected" in detail["message"]
     assert "private-test-token" not in json.dumps(detail)
     assert "test-secret" not in json.dumps(detail)
+
+def test_metrics_summary_endpoint(client):
+    assert client.get("/editorial/metrics/summary").status_code == 401
+    res = client.get("/editorial/metrics/summary", headers=HEADERS)
+    assert res.status_code == 200
+    data = res.json()
+    assert "total_posts" in data
+    assert "published" in data
+    assert "scheduled" in data
+    assert "drafts" in data
+    assert "success_rate" in data
+    assert "platform_counts" in data
+
+
+def test_post_metrics_endpoint(client):
+    draft = client.post("/editorial/posts", json={
+        "idempotency_key": "metrics-test-draft-1",
+        "platform": "facebook",
+        "caption": "Testing metrics endpoint",
+        "timezone": "America/New_York",
+    }, headers=HEADERS).json()
+    post_id = draft["id"]
+
+    # Before publishing, metrics are not available
+    res_unpublished = client.get(f"/editorial/posts/{post_id}/metrics", headers=HEADERS)
+    assert res_unpublished.status_code == 200
+    assert res_unpublished.json()["available"] is False
+    assert "no enviadas" in res_unpublished.json()["message"] or "solo" in res_unpublished.json()["message"]
+
+    # When published, returns live metrics from fetch_meta_metrics
+    mock_metrics = {
+        "platform": "facebook",
+        "external_id": "fb_12345",
+        "reactions": 42,
+        "likes": 42,
+        "comments": 7,
+        "shares": 3,
+        "permalink": "https://www.facebook.com/123/posts/fb_12345",
+        "created_time": "2026-09-29T10:00:00+0000",
+    }
+    with patch.object(mod.editorial, "get", return_value={"id": post_id, "status": "published", "platform": "facebook", "external_id": "fb_12345", "permalink": None}):
+        with patch.object(mod, "fetch_meta_metrics", new=AsyncMock(return_value=mock_metrics)):
+            res_published = client.get(f"/editorial/posts/{post_id}/metrics", headers=HEADERS)
+            assert res_published.status_code == 200
+            data = res_published.json()
+            assert data["available"] is True
+            assert data["metrics"]["likes"] == 42
+            assert data["metrics"]["comments"] == 7
+            assert data["metrics"]["shares"] == 3
