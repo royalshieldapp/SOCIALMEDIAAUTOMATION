@@ -43,8 +43,19 @@
 let apiKey='',draftKey=crypto.randomUUID();
 const $=id=>document.getElementById(id),labels={draft:'Borrador',approved:'Aprobado',scheduled:'Programado',publishing:'En curso',published:'Publicado',failed:'Fallido',needs_review:'Resultado incierto · revisar Meta',cancelled:'Cancelado',pending_review:'Pendiente de revisión'};
 window.pickTopic=t=>{$('aiTopic').value=t;};
-async function api(path,method='GET',body){const response=await fetch(path,{method,headers:{'x-automation-key':apiKey,'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});const data=await response.json();if(!response.ok)throw Error(typeof data.detail==='string'?data.detail:'No se pudo completar la acción. Revisa los datos y la conexión.');return data;}
-async function act(fn){$('message').textContent='';try{await fn();}catch(error){$('message').textContent=error.message;}}
+async function api(path,method='GET',body){
+  const response=await fetch(path,{method,headers:{'x-automation-key':apiKey,'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});
+  const data=await response.json();
+  if(!response.ok){
+    let msg='No se pudo completar la acción. Revisa los datos y la conexión.';
+    if(typeof data.detail==='string') msg=data.detail;
+    else if(Array.isArray(data.detail)) msg=data.detail.map(d=>(d.msg||JSON.stringify(d)).replace('Value error, ','')).join('. ');
+    else if(typeof data.detail==='object'&&data.detail&&data.detail.message) msg=data.detail.message;
+    throw Error(msg);
+  }
+  return data;
+}
+async function act(fn){$('message').textContent='';try{await fn();}catch(error){$('message').textContent='⚠️ ' + error.message;}}
 function text(parent,tag,value,cls){const el=document.createElement(tag);el.textContent=value;if(cls)el.className=cls;parent.append(el);return el;}
 function button(parent,label,fn){const el=text(parent,'button',label);el.onclick=()=>act(async()=>{el.disabled=true;try{await fn();await refresh();}finally{el.disabled=false;}});return el;}
 async function refresh(){const [control,posts,comments]=await Promise.all([api('/editorial/control'),api('/editorial/posts'),api('/editorial/comments')]);$('control').textContent=control.paused?'Automatización pausada':control.scheduler_enabled?'Programador habilitado':'Programador deshabilitado en el servicio';$('posts').replaceChildren();$('comments').replaceChildren();if(!posts.length)text($('posts'),'p','Todavía no hay borradores.');for(const item of posts){const card=document.createElement('article');$('posts').append(card);text(card,'span',labels[item.status]||item.status,'status');text(card,'h2',`${item.platform==='facebook'?'Facebook':'Instagram'} · #${item.id}`);text(card,'p',`Destino: ${item.target_id} · Zona: ${item.timezone}`,'muted');text(card,'p',item.caption,'caption');if(item.image_url){const img=document.createElement('img');img.src=item.image_url;img.alt='Imagen del borrador';img.className='preview';img.referrerPolicy='no-referrer';card.append(img);}if(item.publish_at)text(card,'p',`Programado: ${new Date(item.publish_at).toLocaleString('es',{timeZone:item.timezone})} (${item.timezone})`);if(item.external_id)text(card,'p',`ID confirmado: ${item.external_id}`);if(item.permalink){const a=text(card,'a','Ver publicación');a.href=item.permalink;a.target='_blank';a.rel='noopener noreferrer';}if(item.last_error)text(card,'p',`Revisión necesaria: ${item.last_error}`);if(item.status==='draft')button(card,'Aprobar contenido',async()=>{if(confirm(`¿Aprobar esta versión para ${item.platform}, destino ${item.target_id}?`))await api(`/editorial/posts/${item.id}/approve`,'POST');});if(item.status==='approved'){const input=document.createElement('input');input.type='text';input.placeholder='2026-09-14T10:00:00-04:00';input.setAttribute('aria-label',`Fecha con offset para borrador ${item.id}`);card.append(input);button(card,'Programar publicación',async()=>{if(confirm(`¿Publicar el borrador #${item.id} en ${item.platform} el ${input.value}, zona ${item.timezone}?`))await api(`/editorial/posts/${item.id}/schedule`,'POST',{publish_at:input.value});});}if(['draft','approved','scheduled'].includes(item.status))button(card,'Cancelar',()=>api(`/editorial/posts/${item.id}/cancel`,'POST'));if(item.status==='published'&&!item.permalink)button(card,'Recuperar enlace',()=>api(`/editorial/posts/${item.id}/refresh-link`,'POST'));}
@@ -60,7 +71,10 @@ $('btnAiGenerate').onclick=()=>act(async()=>{
     const res=await api('/ai/generate-post','POST',{topic:$('aiTopic').value,platform:platform});
     $('platform').value=platform;
     $('caption').value=res.caption;
-    $('message').textContent='✨ ¡Publicación generada con éxito por la IA! Puedes revisarla abajo y pulsar "Guardar borrador".';
+    if(platform==='instagram'&&!$('image').value){
+      $('image').value=window.location.origin+'/media/demo-privacy-en.jpg';
+    }
+    $('message').textContent='✨ ¡Publicación generada con éxito por la IA! Revisa o ajusta abajo y pulsa "Guardar borrador".';
   }finally{
     btn.disabled=false;btn.textContent='✨ Generar con IA';
   }
