@@ -26,6 +26,7 @@ from fastapi.responses import PlainTextResponse, FileResponse
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 from editorial import EditorialStore
 import scheduler_daemon
+import ai_content
 
 APP_VERSION = "3.1.0"
 DEFAULT_META_GRAPH_API_VERSION = "v25.0"
@@ -130,6 +131,19 @@ class ReplyPayload(BaseModel):
         if not value:
             raise ValueError("message cannot be empty")
         return value
+
+
+class AIGenerateRequest(BaseModel):
+    topic: Optional[str] = None
+    platform: Platform = "instagram"
+    tone: str = "profesional"
+    language: str = "es"
+
+
+class AIReplyRequest(BaseModel):
+    comment_text: str
+    user_name: str = "Usuario"
+    platform: Platform = "instagram"
 
 
 def now_iso() -> str:
@@ -763,6 +777,8 @@ async def config() -> Dict[str, Any]:
             "INSTAGRAM_GRAPH_HOST": instagram_host(),
             "SCHEDULE_DB_PATH": state.path,
             "SCHEDULER_ENABLED": env_bool("SCHEDULER_ENABLED", False),
+            "NVIDIA_API_KEY": env_set("NVIDIA_API_KEY"),
+            "NVIDIA_MODEL": ai_content.get_nvidia_model(),
         },
     }
 
@@ -882,7 +898,17 @@ async def webhook(
     queued = duplicates = saved = 0
     for event in [*fb, *ig]:
         category = classify(event.comment_text)
-        if not editorial.comment(event, category, reply_text(category, event)):
+        suggested = reply_text(category, event)
+        if env_set("NVIDIA_API_KEY"):
+            try:
+                ai_data = await ai_content.generate_smart_reply(event.comment_text, event.user_name, event.platform)
+                if ai_data.get("reply"):
+                    suggested = ai_data["reply"]
+                if ai_data.get("category") in {"urgent", "lead", "soporte", "comentario_publico", "spam", "irrelevante"}:
+                    category = ai_data["category"]
+            except Exception as exc:
+                logger.warning("Fallo al generar respuesta con IA para webhook: %s", exc)
+        if not editorial.comment(event, category, suggested):
             duplicates += 1
             continue
         saved += 1
@@ -970,6 +996,33 @@ async def refresh_link(post_id: int, x_automation_key: Optional[str] = Header(de
         raise HTTPException(409, "A confirmed publication ID is required")
     editorial.link(post_id, await publication_link(item["platform"], item["external_id"]))
     return editorial.get(post_id)
+
+
+@app.post("/ai/generate-post")
+async def ai_generate_post(
+    payload: AIGenerateRequest,
+    x_automation_key: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    require_automation_key(x_automation_key)
+    return await ai_content.generate_post(
+        topic=payload.topic,
+        platform=payload.platform,
+        tone=payload.tone,
+        language=payload.language,
+    )
+
+
+@app.post("/ai/reply-comment")
+async def ai_reply_comment(
+    payload: AIReplyRequest,
+    x_automation_key: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    require_automation_key(x_automation_key)
+    return await ai_content.generate_smart_reply(
+        comment_text=payload.comment_text,
+        user_name=payload.user_name,
+        platform=payload.platform,
+    )
 
 
 @app.get("/studio", include_in_schema=False)
