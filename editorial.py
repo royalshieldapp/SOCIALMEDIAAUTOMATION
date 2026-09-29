@@ -159,6 +159,16 @@ class EditorialStore:
             conn.execute("UPDATE editorial_posts SET status='publishing',started_at=? WHERE id=?", (now(), row["id"]))
             return self.record(row)
 
+    def force_claim(self, post_id):
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT * FROM editorial_posts WHERE id=? AND status IN ('draft', 'approved', 'scheduled', 'needs_review', 'failed')", (post_id,)).fetchone()
+            if row is None:
+                raise HTTPException(409, "Post not found or cannot be published immediately")
+            conn.execute("UPDATE editorial_posts SET status='publishing',started_at=?,approved_at=COALESCE(approved_at,?) WHERE id=?", (now(), now(), post_id))
+            return self.record(row)
+
+
     def container(self, post_id, container_id):
         with self.connect() as conn:
             cur = conn.execute("UPDATE editorial_posts SET container_id=? WHERE id=? AND status='publishing'", (container_id, post_id))

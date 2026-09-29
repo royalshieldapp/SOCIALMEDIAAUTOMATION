@@ -408,8 +408,18 @@ async function refresh(){
       });
     }
 
+    if(['draft','approved','scheduled','needs_review','failed'].includes(item.status)){
+      button(card,'⚡ Publicar Ahora Mismo',async()=>{
+        if(confirm(`¿Enviar y publicar de inmediato esta versión en ${item.platform}?`)){
+          $('message').textContent='Enviando a Meta...';
+          await api(`/editorial/posts/${item.id}/publish-now`,'POST');
+          $('message').textContent='🎉 ¡Publicado exitosamente en Meta!';
+        }
+      });
+    }
     if(['draft','approved','scheduled'].includes(item.status))button(card,'Cancelar',()=>api(`/editorial/posts/${item.id}/cancel`,'POST'));
     if(item.status==='published'&&!item.permalink)button(card,'Recuperar enlace',()=>api(`/editorial/posts/${item.id}/refresh-link`,'POST'));
+
   }
   for(const item of comments){
     const card=document.createElement('article');

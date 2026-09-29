@@ -975,6 +975,41 @@ async def schedule_draft(post_id: int, payload: ScheduleRequest, x_automation_ke
     return editorial.schedule(post_id, payload.publish_at)
 
 
+@app.post("/editorial/posts/{post_id}/publish-now")
+async def publish_post_now(post_id: int, x_automation_key: Optional[str] = Header(default=None)):
+    require_automation_key(x_automation_key)
+    row = editorial.force_claim(post_id)
+    try:
+        configured_id = require_id("FACEBOOK_PAGE_ID" if row["platform"] == "facebook" else "INSTAGRAM_BUSINESS_ACCOUNT_ID")
+        if row["target_id"] != configured_id:
+            editorial.failure(row["id"], "Destination changed after approval", "failed")
+            raise HTTPException(409, "Target ID changed")
+        result = await publish(PublishPayload(**row), editorial_post_id=row["id"])
+        media = result.get("media", {}) if row["platform"] == "instagram" else result
+        external_id = str(media.get("post_id") or media.get("id") or "")
+        if not re.fullmatch(META_ID_PATTERN, external_id):
+            raise ValueError("Missing provider ID")
+        editorial.success(row["id"], external_id)
+        try:
+            editorial.link(row["id"], await publication_link(row["platform"], external_id))
+        except Exception:
+            logger.warning("Publication confirmed; permalink lookup pending")
+    except Exception as exc:
+        error = type(exc).__name__
+        status = "needs_review"
+        if isinstance(exc, HTTPException) and isinstance(exc.detail, dict):
+            code = exc.detail.get("code")
+            if isinstance(code, int):
+                error = f"Meta rejected request (code {code}); review permissions, token or rate limits"
+                status = "failed"
+        elif isinstance(exc, HTTPException):
+            error = str(exc.detail)
+        editorial.failure(row["id"], error, status)
+        raise HTTPException(502, f"Publication failed: {error}")
+    return editorial.get(post_id)
+
+
+
 @app.post("/editorial/posts/{post_id}/cancel")
 async def cancel_draft(post_id: int, x_automation_key: Optional[str] = Header(default=None)):
     require_automation_key(x_automation_key)
