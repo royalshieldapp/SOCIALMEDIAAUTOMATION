@@ -18,7 +18,7 @@ Solo faltan 2 acciones directas:
 ### Acción 1: Configurar la API Key de NVIDIA en Railway
 1. Entrar a Railway -> Servicio `SOCIALMEDIAAUTOMATION` -> pestaña **Variables**.
 2. Agregar:
-   - `NVIDIA_API_KEY`: `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`
+   - `NVIDIA_API_KEY`: `<tu-clave-de-nvidia>`
    - `NVIDIA_MODEL`: `meta/llama-3.2-11b-vision-instruct` (o el que desees)
    - `SCHEDULER_ENABLED`: `true` (para activar la publicación automática en segundo plano)
 
