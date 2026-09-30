@@ -310,7 +310,9 @@ async function loadMediaGallery(){
     }
 
     // 2. Auto-cargar Google Drive permanente
-    const savedDrive = localStorage.getItem('royal_shield_drive_url') || $('driveFolderUrl').value || 'https://drive.google.com/drive/folders/1cQRshsc-RXkDYE_e55s72iff419kRHFz?usp=sharing';
+    // sessionStorage (no localStorage): la URL solo vive en esta pestaña y la
+    // clave de administración jamás se persiste, solo existe en memoria (apiKey).
+    const savedDrive = sessionStorage.getItem('royal_shield_drive_url') || $('driveFolderUrl').value || 'https://drive.google.com/drive/folders/1cQRshsc-RXkDYE_e55s72iff419kRHFz?usp=sharing';
     $('driveFolderUrl').value = savedDrive;
 
     if(apiKey){
@@ -817,7 +819,8 @@ $('btnSyncDrive').onclick=()=>act(async()=>{
   try{
     const folderUrl=($('driveFolderUrl').value||'').trim();
     if(folderUrl){
-      localStorage.setItem('royal_shield_drive_url', folderUrl);
+      // sessionStorage: solo persiste en esta pestaña, nunca en disco permanente.
+      sessionStorage.setItem('royal_shield_drive_url', folderUrl);
     }
     await loadMediaGallery();
     $('message').textContent='📁 ¡Éxito! Tu carpeta de Google Drive ha sido guardada y sincronizada automáticamente.';

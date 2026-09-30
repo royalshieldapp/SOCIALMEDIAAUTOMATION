@@ -37,8 +37,9 @@ async def main() -> None:
             if key:
                 try:
                     # Wait for the complete cycle, including media processing.
-                    # A read timeout would abandon the request while it still publishes.
-                    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, read=None), trust_env=False) as client:
+                    # A short read timeout would abandon the request while it
+                    # still publishes; cap it at 10 minutes instead.
+                    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, read=600.0), trust_env=False) as client:
                         response = await client.post(
                             f"http://127.0.0.1:{port}/scheduler/run",
                             headers={"x-automation-key": key},

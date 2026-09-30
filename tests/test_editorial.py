@@ -114,7 +114,7 @@ def test_default_timezone_is_new_york(client):
     assert response.json()["timezone"] == "America/New_York"
 
 
-def test_instagram_container_survives_publish_timeout_without_retry(client, monkeypatch):
+def test_instagram_ambiguous_publish_timeout_goes_to_review_without_retry(client, monkeypatch):
     monkeypatch.setenv("INSTAGRAM_ACCESS_TOKEN", "test-token")
     item = approved(client, "instagram")
     make_due(item)
@@ -125,7 +125,11 @@ def test_instagram_container_survives_publish_timeout_without_retry(client, monk
         asyncio.run(mod.run_due_posts())
         saved = mod.editorial.get(item["id"])
         assert saved["container_id"] == "container_123"
+        # The timeout hit media_publish after the container was persisted: the
+        # write is ambiguous, so it must go to review without any retry.
         assert saved["status"] == "needs_review"
+        assert saved["attempts"] == 0
+        assert saved["next_retry_at"] is None
         assert saved["external_id"] is None
         assert asyncio.run(mod.run_due_posts())["checked"] == 0
     assert graph.await_count == 3
@@ -197,14 +201,18 @@ def test_existing_queue_migration_preserves_content_and_approval(client):
     import os
     import sqlite3
     item = approved(client)
-    # Represent the pre-P0 database without the new provider-container column.
+    # Represent the pre-P0 database without the new columns.
     with sqlite3.connect(os.environ["SCHEDULE_DB_PATH"]) as conn:
         conn.execute("ALTER TABLE editorial_posts DROP COLUMN container_id")
+        conn.execute("ALTER TABLE editorial_posts DROP COLUMN attempts")
+        conn.execute("ALTER TABLE editorial_posts DROP COLUMN next_retry_at")
     restored = type(mod.editorial)().get(item["id"])
     assert restored["status"] == "approved"
     assert restored["approved_at"] is not None
     assert restored["caption"] == item["caption"]
     assert restored["container_id"] is None
+    assert restored["attempts"] == 0
+    assert restored["next_retry_at"] is None
 
 
 def test_instagram_unready_image_is_not_published(client, monkeypatch):
@@ -247,7 +255,7 @@ def test_missing_meta_id_never_looks_published_or_retries(client, result):
     assert mod.editorial.claim_due() is None
 
 
-def test_timeout_preserves_other_platform_and_never_blindly_retries(client):
+def test_timeout_schedules_bounded_retry_then_needs_review(client):
     fb = approved(client)
     ig = approved(client, "instagram", "draft-ig")
     make_due(fb)
@@ -257,9 +265,27 @@ def test_timeout_preserves_other_platform_and_never_blindly_retries(client):
          patch.object(mod, "publication_link", new=AsyncMock(return_value="https://www.facebook.com/123/posts/789")):
         asyncio.run(mod.run_due_posts())
     assert mod.editorial.get(fb["id"])["status"] == "published"
-    failed = mod.editorial.get(ig["id"])
-    assert failed["status"] == "needs_review"
-    assert "secret-value" not in json.dumps(failed)
+    retrying = mod.editorial.get(ig["id"])
+    assert retrying["status"] == "scheduled"
+    assert retrying["attempts"] == 1
+    assert retrying["next_retry_at"] is not None
+    assert "secret-value" not in json.dumps(retrying)
+    # Backoff not elapsed: the next cycle must not reclaim the post.
+    assert asyncio.run(mod.run_due_posts())["checked"] == 0
+    # Elapse the retry window twice more: 2nd transient failure still retries,
+    # the 3rd exhausts the bounded attempts and goes to review.
+    for expected_attempts, expected_status in ((2, "scheduled"), (3, "needs_review")):
+        with mod.editorial.connect() as conn:
+            conn.execute(
+                "UPDATE editorial_posts SET next_retry_at=? WHERE id=?",
+                ((datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(), ig["id"]),
+            )
+        with patch.object(mod, "publish", new=AsyncMock(side_effect=TimeoutError("boom"))):
+            asyncio.run(mod.run_due_posts())
+        state = mod.editorial.get(ig["id"])
+        assert state["attempts"] == expected_attempts
+        assert state["status"] == expected_status
+    assert mod.editorial.claim_due() is None
 
 
 def test_target_change_blocks_approved_post(client, monkeypatch):
@@ -287,6 +313,18 @@ def test_comments_persist_as_review_drafts_even_when_auto_reply_flag_enabled(cli
     assert len(inbox) == 1
     assert inbox[0]["status"] == "pending_review"
     assert inbox[0]["category"] == "urgent"
+
+
+def test_instagram_own_comments_are_discarded_like_facebook(client):
+    body = {"object": "instagram", "entry": [{"id": "456", "changes": [{"field": "comments", "value": {
+        "id": "790", "text": "Nuestra propia respuesta", "from": {"id": "456", "username": "royalshieldsecure"}, "media": {"id": "555"}}}]}]}
+    raw = json.dumps(body).encode()
+    headers = {"x-hub-signature-256": "sha256=" + hmac.new(b"test-secret", raw, hashlib.sha256).hexdigest()}
+    response = client.post("/webhook", content=raw, headers=headers)
+    assert response.status_code == 200
+    assert response.json()["instagram_comment_events"] == 0
+    inbox = client.get("/editorial/comments", headers=HEADERS).json()
+    assert inbox == []
 
 
 def test_legacy_post_cannot_bypass_editorial_approval(client):

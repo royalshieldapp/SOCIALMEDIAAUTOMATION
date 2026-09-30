@@ -39,7 +39,8 @@ class EditorialStore:
                     target_id TEXT NOT NULL, timezone TEXT NOT NULL,
                     status TEXT NOT NULL DEFAULT 'draft', created_at TEXT NOT NULL,
                     approved_at TEXT, publish_at TEXT, started_at TEXT,
-                    published_at TEXT, external_id TEXT, permalink TEXT, last_error TEXT
+                    published_at TEXT, external_id TEXT, permalink TEXT, container_id TEXT,
+                    attempts INTEGER NOT NULL DEFAULT 0, next_retry_at TEXT, last_error TEXT
                 );
                 CREATE TABLE IF NOT EXISTS editorial_control (
                     id INTEGER PRIMARY KEY CHECK(id=1), paused INTEGER NOT NULL
@@ -63,6 +64,10 @@ class EditorialStore:
             columns = {row["name"] for row in conn.execute("PRAGMA table_info(editorial_posts)")}
             if "container_id" not in columns:
                 conn.execute("ALTER TABLE editorial_posts ADD COLUMN container_id TEXT")
+            if "attempts" not in columns:
+                conn.execute("ALTER TABLE editorial_posts ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0")
+            if "next_retry_at" not in columns:
+                conn.execute("ALTER TABLE editorial_posts ADD COLUMN next_retry_at TEXT")
             conn.commit()
             yield conn
             conn.commit()
@@ -170,7 +175,7 @@ class EditorialStore:
         except (TypeError, ValueError):
             raise HTTPException(422, "Use a future timestamp with the offset of the draft's IANA timezone") from None
         with self.connect() as conn:
-            cur = conn.execute("UPDATE editorial_posts SET status='scheduled',publish_at=? WHERE id=? AND status='approved'",
+            cur = conn.execute("UPDATE editorial_posts SET status='scheduled',publish_at=?,attempts=0,next_retry_at=NULL WHERE id=? AND status='approved'",
                                (dt.astimezone(timezone.utc).isoformat(), post_id))
             if cur.rowcount != 1:
                 raise HTTPException(409, "Draft state changed; refresh before scheduling")
@@ -192,13 +197,17 @@ class EditorialStore:
     def claim_due(self):
         with self.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            current = now()
             cutoff = (datetime.now(timezone.utc) - timedelta(minutes=15)).isoformat()
             conn.execute("UPDATE editorial_posts SET status='needs_review',last_error='Worker interrupted; verify Meta before any new attempt' WHERE status='publishing' AND started_at<?", (cutoff,))
             if conn.execute("SELECT paused FROM editorial_control WHERE id=1").fetchone()[0]:
                 return None
             # A restart must not release old campaigns outside their approved window.
-            conn.execute("UPDATE editorial_posts SET status='needs_review',last_error='Scheduled time missed by more than 15 minutes; review and approve a new schedule' WHERE status='scheduled' AND publish_at<?", (cutoff,))
-            row = conn.execute("SELECT * FROM editorial_posts WHERE status='scheduled' AND approved_at IS NOT NULL AND publish_at<=? ORDER BY publish_at,id LIMIT 1", (now(),)).fetchone()
+            # Rows awaiting a bounded retry (next_retry_at set) are quarantined only
+            # when their retry window is also stale; publish_at alone is their
+            # original due time, not the retry's.
+            conn.execute("UPDATE editorial_posts SET status='needs_review',last_error='Scheduled time missed by more than 15 minutes; review and approve a new schedule' WHERE status='scheduled' AND publish_at<? AND (next_retry_at IS NULL OR next_retry_at<?)", (cutoff, cutoff))
+            row = conn.execute("SELECT * FROM editorial_posts WHERE status='scheduled' AND approved_at IS NOT NULL AND publish_at<=? AND (next_retry_at IS NULL OR next_retry_at<=?) ORDER BY publish_at,id LIMIT 1", (current, current)).fetchone()
             if row is None:
                 return None
             conn.execute("UPDATE editorial_posts SET status='publishing',started_at=? WHERE id=?", (now(), row["id"]))
@@ -241,15 +250,30 @@ class EditorialStore:
 
     def success(self, post_id, external_id):
         with self.connect() as conn:
-            conn.execute("UPDATE editorial_posts SET status='published',external_id=?,published_at=?,last_error=NULL WHERE id=? AND status='publishing'", (external_id, now(), post_id))
+            conn.execute("UPDATE editorial_posts SET status='published',external_id=?,published_at=?,last_error=NULL,next_retry_at=NULL WHERE id=? AND status='publishing'", (external_id, now(), post_id))
 
     def link(self, post_id, permalink):
         with self.connect() as conn:
             conn.execute("UPDATE editorial_posts SET permalink=? WHERE id=? AND status='published'", (permalink, post_id))
 
-    def failure(self, post_id, error, status="needs_review"):
+    def failure(self, post_id, error, status="needs_review", attempts=None):
         with self.connect() as conn:
-            conn.execute("UPDATE editorial_posts SET status=?,last_error=? WHERE id=? AND status='publishing'", (status, error, post_id))
+            if attempts is None:
+                conn.execute("UPDATE editorial_posts SET status=?,last_error=?,next_retry_at=NULL WHERE id=? AND status='publishing'", (status, error, post_id))
+            else:
+                conn.execute("UPDATE editorial_posts SET status=?,last_error=?,next_retry_at=NULL,attempts=? WHERE id=? AND status='publishing'", (status, error, attempts, post_id))
+
+    def schedule_retry(self, post_id, error, attempts, next_retry_at):
+        """Return a transiently-failed post to 'scheduled' for one bounded retry.
+
+        The post keeps its original approval and publish_at; claim_due() will only
+        reclaim it once next_retry_at has passed. Raises 409 if the row is no
+        longer in 'publishing' (e.g. concurrently claimed or reviewed).
+        """
+        with self.connect() as conn:
+            cur = conn.execute("UPDATE editorial_posts SET status='scheduled',attempts=?,next_retry_at=?,last_error=? WHERE id=? AND status='publishing'", (attempts, next_retry_at, error, post_id))
+            if cur.rowcount != 1:
+                raise HTTPException(409, "Publication state changed; cannot schedule retry")
 
     def comment(self, event, category, reply):
         with self.connect() as conn:

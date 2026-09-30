@@ -17,12 +17,12 @@ from collections import deque
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path as FilePath
 from urllib.parse import urlsplit
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Literal, Optional
 
 import httpx
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Path, Query, Request
-from fastapi.responses import PlainTextResponse, FileResponse, Response
+from fastapi.responses import PlainTextResponse, FileResponse, StreamingResponse
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 from editorial import EditorialStore
 import scheduler_daemon
@@ -640,6 +640,10 @@ def instagram_events(body: Dict[str, Any]) -> List[CommentPayload]:
             if not isinstance(value, dict) or not value.get("id"):
                 continue
             actor = value.get("from") if isinstance(value.get("from"), dict) else {}
+            account_id = os.getenv("INSTAGRAM_BUSINESS_ACCOUNT_ID", "")
+            # Descartar comentarios propios, igual que en Facebook.
+            if account_id and str(actor.get("id", "")) == account_id:
+                continue
             media = value.get("media") if isinstance(value.get("media"), dict) else {}
             result.append(
                 CommentPayload(
@@ -677,6 +681,37 @@ async def process_event(event: CommentPayload) -> None:
         )
 
 
+MAX_PUBLISH_ATTEMPTS = 3
+RETRY_BACKOFF_MINUTES = (5, 15, 45)
+
+
+def _is_transient_publish_error(exc: BaseException) -> bool:
+    """True solo para fallos claramente transitorios de red/proveedor.
+
+    No incluye rechazos con código entero de Meta (permanentes) ni errores de
+    validación: esos se deciden en el bloque except antes de llamar aquí.
+    """
+    if isinstance(exc, (httpx.RequestError, TimeoutError)):
+        return True
+    return isinstance(exc, HTTPException) and exc.status_code in (502, 504)
+
+
+def _ambiguous_write_after_publish(post_id: int, platform: str) -> bool:
+    """True si el fallo pudo ocurrir después de un write en Meta.
+
+    Instagram persiste container_id antes de media_publish: si el contenedor
+    existe, el publish pudo haberse ejecutado y reintentarlo podría duplicar
+    la publicación, así que va a revisión humana sin reintento.
+    """
+    if platform != "instagram":
+        return False
+    try:
+        current = editorial.get(post_id)
+    except HTTPException:
+        return False
+    return bool(current.get("container_id"))
+
+
 async def run_due_posts() -> Dict[str, Any]:
     published = failed = checked = 0
     if not env_bool("SCHEDULER_ENABLED", False):
@@ -707,11 +742,27 @@ async def run_due_posts() -> Dict[str, Any]:
         except Exception as exc:
             error = type(exc).__name__
             status = "needs_review"
+            permanent = False
             if isinstance(exc, HTTPException) and isinstance(exc.detail, dict):
                 code = exc.detail.get("code")
                 if isinstance(code, int):
+                    # Código entero del proveedor: rechazo definitivo de Meta.
                     error = f"Meta rejected request (code {code}); review permissions, token or rate limits"
                     status = "failed"
+                    permanent = True
+            if not permanent and _is_transient_publish_error(exc) and not _ambiguous_write_after_publish(row["id"], row["platform"]):
+                # Fallo transitorio antes de un write confirmado: reintento acotado.
+                attempts = (row.get("attempts") or 0) + 1
+                if attempts >= MAX_PUBLISH_ATTEMPTS:
+                    editorial.failure(row["id"], f"{error} (transient, {attempts} attempts exhausted)", "needs_review", attempts=attempts)
+                    logger.warning("Post %s: transient failure persisted after %d attempts; needs review", row["id"], attempts)
+                else:
+                    delay_minutes = RETRY_BACKOFF_MINUTES[attempts - 1]
+                    retry_at = (datetime.now(timezone.utc) + timedelta(minutes=delay_minutes)).isoformat()
+                    editorial.schedule_retry(row["id"], error, attempts, retry_at)
+                    logger.warning("Post %s: transient %s; retry %d/%d at %s", row["id"], error, attempts, MAX_PUBLISH_ATTEMPTS, retry_at)
+                failed += 1
+                continue
             editorial.failure(row["id"], error, status)
             failed += 1
     return {
@@ -837,7 +888,8 @@ async def health() -> Dict[str, Any]:
 
 
 @app.get("/config")
-async def config() -> Dict[str, Any]:
+async def config(x_automation_key: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+    require_automation_key(x_automation_key)
     return {
         "ok": True,
         "version": APP_VERSION,
@@ -877,7 +929,7 @@ async def verify_webhook(
     expected = (os.getenv("META_VERIFY_TOKEN") or "").strip()
     if not expected:
         raise HTTPException(403, "META_VERIFY_TOKEN is not configured")
-    if hub_mode == "subscribe" and hub_verify_token == expected:
+    if hub_mode == "subscribe" and hmac.compare_digest(hub_verify_token or "", expected):
         return PlainTextResponse(hub_challenge or "")
     raise HTTPException(403, "Invalid Meta verify token")
 
@@ -1208,16 +1260,97 @@ async def drive_sync(
 ) -> Dict[str, Any]:
     require_automation_key(x_automation_key)
     base_host = str(request.base_url).rstrip("/")
-    return await drive_integration.fetch_folder_images(payload.folder_url, base_host)
+    result = await drive_integration.fetch_folder_images(payload.folder_url, base_host)
+    # Firmar las URLs del proxy para que Meta pueda descargarlas sin cabeceras.
+    for image in result.get("images", []):
+        direct = image.get("direct_url")
+        if direct:
+            image["direct_url"] = sign_drive_proxy_url(direct)
+    return result
+
+
+DRIVE_PROXY_MAX_BYTES = 25 * 1024 * 1024
+
+
+def drive_proxy_signature(file_id: str, exp: int) -> str:
+    """HMAC que autoriza una URL de /drive/proxy/{file_id} hasta exp (epoch)."""
+    key = (os.getenv("AUTOMATION_API_KEY") or "").strip()
+    return hmac.new(key.encode(), f"{file_id}:{exp}".encode(), hashlib.sha256).hexdigest()
+
+
+def sign_drive_proxy_url(url: str, ttl_seconds: int = 6 * 3600) -> str:
+    """Agrega exp+sig a una URL de /drive/proxy para que Meta la lea sin cabeceras.
+
+    Si no hay AUTOMATION_API_KEY configurada o la URL no es del proxy, se
+    devuelve sin cambios (el proxy fallará cerrado con 503 igualmente).
+    """
+    key = (os.getenv("AUTOMATION_API_KEY") or "").strip()
+    if not key:
+        return url
+    match = re.search(r"/drive/proxy/([a-zA-Z0-9_-]{20,})(?:\?|$)", url)
+    if not match:
+        return url
+    exp = int(time.time()) + ttl_seconds
+    sig = drive_proxy_signature(match.group(1), exp)
+    sep = "&" if "?" in url else "?"
+    return f"{url}{sep}exp={exp}&sig={sig}"
 
 
 @app.get("/drive/proxy/{file_id}", include_in_schema=False)
-async def drive_proxy(file_id: str = Path(..., pattern=r"^[a-zA-Z0-9_-]{20,}$")):
-    resp = await drive_integration.stream_drive_file(file_id)
-    if resp.status_code != 200:
-        raise HTTPException(502, "Could not fetch image from Google Drive")
-    content_type = resp.headers.get("content-type", "image/jpeg")
-    return Response(content=resp.content, media_type=content_type, headers={"Cache-Control": "public, max-age=86400"})
+async def drive_proxy(
+    file_id: str = Path(..., pattern=r"^[a-zA-Z0-9_-]{20,}$"),
+    exp: str = Query(default=""),
+    sig: str = Query(default=""),
+):
+    # El proxy sirve imágenes a Meta sin cabecera de autenticación, por lo que
+    # exige una firma HMAC con expiración emitida por /drive/sync.
+    key = (os.getenv("AUTOMATION_API_KEY") or "").strip()
+    if not key:
+        raise HTTPException(503, "AUTOMATION_API_KEY is not configured")
+    try:
+        exp_int = int(exp)
+    except (TypeError, ValueError):
+        raise HTTPException(401, "Invalid or missing proxy signature")
+    if exp_int < int(time.time()):
+        raise HTTPException(401, "Proxy URL expired")
+    if not sig or not hmac.compare_digest(sig, drive_proxy_signature(file_id, exp_int)):
+        raise HTTPException(401, "Invalid proxy signature")
+    resp, aclose = await drive_integration.stream_drive_file(file_id)
+    try:
+        if resp.status_code != 200:
+            raise HTTPException(502, "Could not fetch image from Google Drive")
+        content_type = resp.headers.get("content-type", "")
+        if not content_type.lower().startswith("image/"):
+            raise HTTPException(502, "Google Drive did not return an image")
+        declared = resp.headers.get("content-length")
+        if declared is not None:
+            try:
+                if int(declared) > DRIVE_PROXY_MAX_BYTES:
+                    raise HTTPException(413, "Image exceeds the 25 MB proxy limit")
+            except ValueError:
+                pass
+
+        async def capped_stream():
+            total = 0
+            try:
+                async for chunk in resp.aiter_bytes():
+                    total += len(chunk)
+                    if total > DRIVE_PROXY_MAX_BYTES:
+                        # Cap duro incluso sin Content-Length: nunca servir más de 25 MB.
+                        logger.warning("Drive proxy body exceeded 25 MB; truncating %s", file_id)
+                        break
+                    yield chunk
+            finally:
+                await aclose()
+
+        return StreamingResponse(
+            capped_stream(),
+            media_type=content_type,
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
+    except Exception:
+        await aclose()
+        raise
 
 
 @app.get("/studio", include_in_schema=False)

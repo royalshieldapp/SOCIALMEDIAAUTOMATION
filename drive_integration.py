@@ -129,10 +129,30 @@ async def fetch_folder_images(folder_id_or_url: Optional[str] = None, base_host:
     }
 
 
-async def stream_drive_file(file_id: str) -> httpx.Response:
-    """Descarga el stream del archivo de Google Drive para servirlo a Meta como proxy."""
-    # Google Drive export endpoint para descarga directa
+async def stream_drive_file(file_id: str):
+    """Abre un stream de descarga del archivo de Google Drive para servirlo como proxy.
+
+    Devuelve ``(response, aclose)``. El llamador debe consumir el cuerpo con
+    ``response.aiter_bytes()`` y después invocar ``aclose()`` para liberar la
+    conexión; la respuesta no sigue siendo utilizable tras cerrar el cliente.
+    """
     url = f"https://drive.google.com/uc?export=download&id={file_id}"
     client = httpx.AsyncClient(timeout=30.0, follow_redirects=True)
-    response = await client.get(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
-    return response
+    try:
+        request = client.build_request(
+            "GET",
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+        )
+        response = await client.send(request, stream=True)
+    except Exception:
+        await client.aclose()
+        raise
+
+    async def aclose() -> None:
+        try:
+            await response.aclose()
+        finally:
+            await client.aclose()
+
+    return response, aclose

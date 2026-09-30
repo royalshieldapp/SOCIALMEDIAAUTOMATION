@@ -75,6 +75,15 @@ def test_mutating_endpoint_rejects_wrong_key(client):
     assert response.status_code == 401
 
 
+def test_config_requires_automation_key(client):
+    assert client.get("/config").status_code in (401, 503)
+    os.environ["AUTOMATION_API_KEY"] = "expected"
+    assert client.get("/config").status_code == 401
+    response = client.get("/config", headers={"x-automation-key": "expected"})
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+
+
 def test_facebook_publish_calls_graph_api(client):
     os.environ.update(
         {

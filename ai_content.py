@@ -62,7 +62,7 @@ async def call_nvidia_chat(messages: List[Dict[str, str]], *, temperature: float
     async with httpx.AsyncClient(timeout=AI_TIMEOUT) as client:
         response = await client.post(DEFAULT_NVIDIA_URL, json=payload, headers=headers)
         if response.status_code != 200:
-            logger.error("NVIDIA API error %s: %s", response.status_code, response.text)
+            logger.error("NVIDIA API error %s", response.status_code)
             raise RuntimeError(f"NVIDIA NIM error {response.status_code}: {response.text[:200]}")
         
         data = response.json()
