@@ -1,0 +1,35 @@
+# Royal Shield Social Media Automation — Fly.io
+# App created 2026-11-25. Volume automation_data (1 GB, iad) holds the
+# SQLite DB at /data. Secrets (META_*, tokens) are NOT in this file:
+# they are set with `flyctl secrets set` once the Railway values arrive.
+app = "royalshield-automation"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8000"
+  ENVIRONMENT = "production"
+  SCHEDULE_DB_PATH = "/data/socialmediaautomation.db"
+  RAILWAY_VOLUME_MOUNT_PATH = "/data"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+
+[[mounts]]
+  source = "automation_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = false
+  min_machines_running = 1
+
+[[http_service.checks]]
+  grace_period = "30s"
+  interval = "30s"
+  timeout = "5s"
+  type = "tcp"
