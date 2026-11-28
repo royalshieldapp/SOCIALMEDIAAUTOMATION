@@ -1,0 +1,58 @@
+# Deploy del backend SOCIALMEDIAAUTOMATION a Fly.io
+#
+# Para qué es: el build de Docker falla desde el entorno de HELIOX
+# (Depot y el builder clásico dan error TLS "first record does not look
+# like a TLS handshake" por el proxy de salida). Este workflow hace que
+# GitHub Actions corra el deploy y que el build se haga en el builder
+# REMOTO de Fly (--remote-only), así el deploy ya no depende de esta
+# conexión.
+#
+# Cómo usarlo:
+#   1. Copiar este archivo a .github/workflows/deploy.yml en el repo
+#      royalshieldapp/SOCIALMEDIAAUTOMATION (rama main). OJO: el
+#      fly.toml también tiene que estar commiteado en el repo — en el
+#      clon fresco está sin commitear, así que hay que agregarlo junto
+#      con este archivo (git add fly.toml .github/workflows/deploy.yml).
+#   2. En GitHub: repo Settings -> Secrets and variables -> Actions ->
+#      New repository secret, nombre: FLY_API_TOKEN, valor: el token
+#      de acceso personal de Fly.io (el mismo que ya se creó en
+#      fly.io/user/personal_access_tokens). Nunca pegarlo en el chat.
+#   3. Cada push a main despliega solo. También se puede lanzar a mano
+#      desde la pestaña Actions -> "Deploy to Fly.io" -> Run workflow.
+#
+# Estado 2026-11-25 ~18:28 EST: las variables de Railway YA están en
+# Fly — el archivo llegó por segunda vez, 41 secretos cargados y
+# verificados con `flyctl secrets list`, y el archivo se borró después.
+# El deploy ya levantaría con la config real. Lo único que falta es
+# este workflow + el secreto FLY_API_TOKEN en el repo: el tercer
+# intento de build desde aquí falló con el mismo error TLS del
+# builder clásico.
+#
+# App: royalshield-automation — región iad (Ashburn) — volumen
+# automation_data (1 GB) ya creado y montado en /data según fly.toml.
+
+name: Deploy to Fly.io
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy backend to Fly.io
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Quick syntax check (fail fast before deploying)
+        run: python -m py_compile SOCIALMEDIAUTOMATION.py scheduler_daemon.py editorial.py ai_content.py
+
+      - name: Set up flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@v1
+
+      - name: Deploy to Fly.io with the remote builder
+        run: flyctl deploy --remote-only --app royalshield-automation
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
